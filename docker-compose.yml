@@ -11,9 +11,10 @@ services:
       - BACKEND_CORS_ORIGINS=["http://localhost:5173","http://localhost:3000","http://localhost:80"]
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
-      interval: 10s
-      timeout: 5s
-      retries: 3
+      interval: 5s
+      timeout: 3s
+      retries: 5
+      start_period: 5s
     networks:
       - mathboard-net
 
