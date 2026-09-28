@@ -5,7 +5,8 @@ import {
   AddObjectCommand,
   MoveObjectCommand,
   DeleteObjectCommand,
-  defaultCoordinateTransformer,
+  CoordinateManager,
+  type CanvasRect,
   BoardScope,
   type Viewport,
 } from '@mathboard/core';
@@ -98,6 +99,7 @@ export function MathBoardCanvas() {
   const initialObjPosRef = useRef({ x: 0, y: 0 });
 
   // Native In-Canvas Handwriting Engine state
+  const containerRef = useRef<HTMLDivElement>(null);
   const inkCanvasRef = useRef<HTMLCanvasElement>(null);
   const [writingState, setWritingState] = useState<WritingLifecycle>('IDLE');
   const [inkStrokes, setInkStrokes] = useState<StrokePoint[][]>([]);
@@ -112,6 +114,21 @@ export function MathBoardCanvas() {
     setCanUndo(historyRef.current.canUndo);
     setCanRedo(historyRef.current.canRedo);
   }, []);
+
+  // Centralized Coordinate Helpers
+  const getCanvasRect = useCallback((): CanvasRect | undefined => {
+    const canvas = inkCanvasRef.current;
+    if (!canvas) return undefined;
+    const r = canvas.getBoundingClientRect();
+    return { left: r.left, top: r.top, width: r.width, height: r.height };
+  }, []);
+
+  const screenToBoard = useCallback(
+    (screenPt: { clientX: number; clientY: number }) => {
+      return CoordinateManager.screenToBoard(screenPt, viewport, getCanvasRect());
+    },
+    [viewport, getCanvasRect]
+  );
 
   // Listen to scope changes
   useEffect(() => {
@@ -237,20 +254,24 @@ export function MathBoardCanvas() {
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [handleUndo, handleRedo]);
 
-  // Resize ink canvas
+  // Configure HiDPI Canvas on resize and mount
   useEffect(() => {
     const canvas = inkCanvasRef.current;
     if (!canvas) return;
     const handleResize = () => {
-      canvas.width = window.innerWidth;
-      canvas.height = window.innerHeight;
+      CoordinateManager.setupHiDPICanvas(
+        canvas,
+        window.innerWidth,
+        window.innerHeight,
+        (typeof window !== 'undefined' ? window.devicePixelRatio : 1) || 1
+      );
     };
     handleResize();
     window.addEventListener('resize', handleResize);
     return () => window.removeEventListener('resize', handleResize);
   }, []);
 
-  // Redraw native ink strokes aligned with world viewport
+  // Redraw native ink strokes aligned with world viewport with high subpixel precision
   useEffect(() => {
     const canvas = inkCanvasRef.current;
     if (!canvas) return;
@@ -262,9 +283,9 @@ export function MathBoardCanvas() {
     const allStrokes = [...inkStrokes, ...(currentStroke.length > 0 ? [currentStroke] : [])];
     if (allStrokes.length === 0) return;
 
-    // Ink style
-    ctx.strokeStyle = '#1e293b'; // crisp dark slate ink
-    ctx.lineWidth = Math.max(2.2, 3.2 * viewport.zoom);
+    // Ink style: crisp dark slate ink with smooth rounded caps
+    ctx.strokeStyle = '#1e293b';
+    ctx.lineWidth = Math.max(2.4, 3.2 * viewport.zoom);
     ctx.lineCap = 'round';
     ctx.lineJoin = 'round';
 
@@ -272,14 +293,12 @@ export function MathBoardCanvas() {
       if (stroke.length < 2) continue;
       ctx.beginPath();
       // Transform world coords to screen
-      const startScreenX = stroke[0].x * viewport.zoom + viewport.x;
-      const startScreenY = stroke[0].y * viewport.zoom + viewport.y;
-      ctx.moveTo(startScreenX, startScreenY);
+      const startScreen = CoordinateManager.boardToScreen(stroke[0], viewport);
+      ctx.moveTo(startScreen.x, startScreen.y);
 
       for (let i = 1; i < stroke.length; i++) {
-        const sx = stroke[i].x * viewport.zoom + viewport.x;
-        const sy = stroke[i].y * viewport.zoom + viewport.y;
-        ctx.lineTo(sx, sy);
+        const ptScreen = CoordinateManager.boardToScreen(stroke[i], viewport);
+        ctx.lineTo(ptScreen.x, ptScreen.y);
       }
       ctx.stroke();
     }
@@ -405,26 +424,31 @@ export function MathBoardCanvas() {
     }, 2000);
   }, [processPendingInkStrokes]);
 
-  // Canvas Mouse Handlers
-  const handleMouseDown = (e: React.MouseEvent) => {
-    // Middle button or Pan tool pans the canvas
+  // Pointer Events Handlers (Handles Mouse, Pen/Stylus, Touch uniformly with capture)
+  const handlePointerDown = (e: React.PointerEvent) => {
     if (e.button === 1 || currentTool === 'pan') {
       isPanningRef.current = true;
       panStartRef.current = { x: e.clientX - viewport.x, y: e.clientY - viewport.y };
       setSelectedId(null);
+      try {
+        e.currentTarget.setPointerCapture(e.pointerId);
+      } catch {
+        // ignore
+      }
       return;
     }
 
-    // Pencil tool on canvas: start drawing in world coordinates
-    if (currentTool === 'pencil' && (e.button === 0 && (e.target === e.currentTarget || (e.target as HTMLElement).tagName === 'CANVAS'))) {
+    if (currentTool === 'pencil' && e.button === 0) {
       isDrawingInkRef.current = true;
+      try {
+        e.currentTarget.setPointerCapture(e.pointerId);
+      } catch {
+        // ignore
+      }
       if (debounceTimerRef.current) {
         clearTimeout(debounceTimerRef.current);
       }
-      const worldPt = defaultCoordinateTransformer.screenToWorld(
-        { x: e.clientX, y: e.clientY },
-        viewport
-      );
+      const worldPt = screenToBoard({ clientX: e.clientX, clientY: e.clientY });
       const pt: StrokePoint = { x: worldPt.x, y: worldPt.y, time: Date.now() };
       setCurrentStroke([pt]);
       setWritingState('WRITING');
@@ -432,13 +456,12 @@ export function MathBoardCanvas() {
       return;
     }
 
-    // Default select tool on canvas click clears selection
     if (currentTool === 'select' && e.target === e.currentTarget) {
       setSelectedId(null);
     }
   };
 
-  const handleMouseMove = (e: React.MouseEvent) => {
+  const handlePointerMove = (e: React.PointerEvent) => {
     if (isPanningRef.current) {
       setViewport((prev) => ({
         ...prev,
@@ -446,12 +469,18 @@ export function MathBoardCanvas() {
         y: e.clientY - panStartRef.current.y,
       }));
     } else if (isDrawingInkRef.current) {
-      const worldPt = defaultCoordinateTransformer.screenToWorld(
-        { x: e.clientX, y: e.clientY },
-        viewport
-      );
-      const pt: StrokePoint = { x: worldPt.x, y: worldPt.y, time: Date.now() };
-      setCurrentStroke((prev) => [...prev, pt]);
+      const nativeEvent = e.nativeEvent as PointerEvent;
+      const coalesced = typeof nativeEvent.getCoalescedEvents === 'function'
+        ? nativeEvent.getCoalescedEvents()
+        : [e];
+
+      const newPts: StrokePoint[] = [];
+      for (const ce of coalesced) {
+        const worldPt = screenToBoard({ clientX: ce.clientX, clientY: ce.clientY });
+        newPts.push({ x: worldPt.x, y: worldPt.y, time: Date.now() });
+      }
+
+      setCurrentStroke((prev) => [...prev, ...newPts]);
     } else if (draggingIdRef.current) {
       const dx = (e.clientX - dragStartPosRef.current.x) / viewport.zoom;
       const dy = (e.clientY - dragStartPosRef.current.y) / viewport.zoom;
@@ -464,7 +493,12 @@ export function MathBoardCanvas() {
     }
   };
 
-  const handleMouseUp = () => {
+  const handlePointerUp = (e: React.PointerEvent) => {
+    try {
+      e.currentTarget.releasePointerCapture(e.pointerId);
+    } catch {
+      // ignore
+    }
     if (isPanningRef.current) {
       isPanningRef.current = false;
     }
@@ -509,7 +543,7 @@ export function MathBoardCanvas() {
   };
 
   // Object dragging start
-  const handleObjectDragStart = (e: React.MouseEvent, obj: BoardObject) => {
+  const handleObjectDragStart = (e: React.PointerEvent, obj: BoardObject) => {
     if (currentTool === 'pencil' || currentTool === 'pan') return;
     e.stopPropagation();
     setSelectedId(obj.id);
@@ -520,10 +554,7 @@ export function MathBoardCanvas() {
 
   // Add Math Object from Modal
   const handleAddMathObject = (latex: string) => {
-    const centerWorld = defaultCoordinateTransformer.screenToWorld(
-      { x: window.innerWidth / 2, y: window.innerHeight / 2 },
-      viewport
-    );
+    const centerWorld = screenToBoard({ x: window.innerWidth / 2, y: window.innerHeight / 2 } as any);
 
     const assignment = BoardScope.parseAssignment(latex);
     if (assignment) {
@@ -546,10 +577,7 @@ export function MathBoardCanvas() {
 
   // Add 3D Graph Object (Fase 9)
   const handleAddGraph3D = () => {
-    const centerWorld = defaultCoordinateTransformer.screenToWorld(
-      { x: window.innerWidth / 2, y: window.innerHeight / 2 },
-      viewport
-    );
+    const centerWorld = screenToBoard({ x: window.innerWidth / 2, y: window.innerHeight / 2 } as any);
     const new3D: Graph3DBoardObject = {
       id: `graph3d-${Date.now()}`,
       type: 'graph3d',
@@ -566,10 +594,7 @@ export function MathBoardCanvas() {
 
   // Add Educational Exercise Card (Fase 11)
   const handleAddExercise = () => {
-    const centerWorld = defaultCoordinateTransformer.screenToWorld(
-      { x: window.innerWidth / 2, y: window.innerHeight / 2 },
-      viewport
-    );
+    const centerWorld = screenToBoard({ x: window.innerWidth / 2, y: window.innerHeight / 2 } as any);
     const newEx: ExerciseBoardObject = {
       id: `exercise-${Date.now()}`,
       type: 'exercise',
@@ -587,10 +612,7 @@ export function MathBoardCanvas() {
 
   // Add Graph Object
   const handleAddGraph = () => {
-    const centerWorld = defaultCoordinateTransformer.screenToWorld(
-      { x: window.innerWidth / 2, y: window.innerHeight / 2 },
-      viewport
-    );
+    const centerWorld = screenToBoard({ x: window.innerWidth / 2, y: window.innerHeight / 2 } as any);
     const newGraph: GraphBoardObject = {
       id: `graph-${Date.now()}`,
       type: 'graph',
@@ -608,10 +630,7 @@ export function MathBoardCanvas() {
 
   // Add Geometry Vector Object
   const handleAddGeometry = () => {
-    const centerWorld = defaultCoordinateTransformer.screenToWorld(
-      { x: window.innerWidth / 2, y: window.innerHeight / 2 },
-      viewport
-    );
+    const centerWorld = screenToBoard({ x: window.innerWidth / 2, y: window.innerHeight / 2 } as any);
     const newGeo: GeometryBoardObject = {
       id: `geo-${Date.now()}`,
       type: 'geometry',
@@ -631,10 +650,7 @@ export function MathBoardCanvas() {
 
   // Add Physics Simulation Object
   const handleAddPhysics = () => {
-    const centerWorld = defaultCoordinateTransformer.screenToWorld(
-      { x: window.innerWidth / 2, y: window.innerHeight / 2 },
-      viewport
-    );
+    const centerWorld = screenToBoard({ x: window.innerWidth / 2, y: window.innerHeight / 2 } as any);
     const newPhys: PhysicsBoardObject = {
       id: `phys-${Date.now()}`,
       type: 'physics',
@@ -782,12 +798,14 @@ export function MathBoardCanvas() {
 
   return (
     <div
-      className={`relative w-screen h-screen overflow-hidden select-none bg-white ${
+      ref={containerRef}
+      className={`relative w-screen h-screen overflow-hidden select-none bg-white touch-none ${
         currentTool === 'pencil' ? 'cursor-crosshair' : currentTool === 'pan' ? 'cursor-grab' : 'cursor-default'
       }`}
-      onMouseDown={handleMouseDown}
-      onMouseMove={handleMouseMove}
-      onMouseUp={handleMouseUp}
+      onPointerDown={handlePointerDown}
+      onPointerMove={handlePointerMove}
+      onPointerUp={handlePointerUp}
+      onPointerCancel={handlePointerUp}
       onWheel={handleWheel}
     >
       {/* Floating Toolbar */}
@@ -816,7 +834,7 @@ export function MathBoardCanvas() {
         }}
       />
 
-      {/* Native Ink HTML5 Canvas Layer (Runs smoothly across the whole viewport) */}
+      {/* Native Ink HTML5 Canvas Layer (HiDPI synced with viewport) */}
       <canvas
         ref={inkCanvasRef}
         className="absolute inset-0 pointer-events-none z-10 block"
@@ -856,7 +874,7 @@ export function MathBoardCanvas() {
               key={obj.id}
               onMouseEnter={() => setHoveredId(obj.id)}
               onMouseLeave={() => setHoveredId(null)}
-              onMouseDown={(e) => handleObjectDragStart(e, obj)}
+              onPointerDown={(e) => handleObjectDragStart(e, obj)}
               style={{
                 transform: `translate(${obj.position.x}px, ${obj.position.y}px)`,
                 cursor: currentTool === 'pan' ? 'grab' : currentTool === 'pencil' ? 'crosshair' : 'move',

@@ -1,6 +1,8 @@
 import type { BoardObject, Position } from '@mathboard/shared';
 
 export * from './scope';
+export * from './coordinates';
+import { CoordinateManager } from './coordinates';
 
 export interface Viewport {
   x: number;
@@ -15,16 +17,10 @@ export interface CoordinateTransformer {
 
 export const defaultCoordinateTransformer: CoordinateTransformer = {
   screenToWorld(screen: Position, viewport: Viewport): Position {
-    return {
-      x: (screen.x - viewport.x) / viewport.zoom,
-      y: (screen.y - viewport.y) / viewport.zoom,
-    };
+    return CoordinateManager.screenToBoard({ clientX: screen.x, clientY: screen.y }, viewport);
   },
   worldToScreen(world: Position, viewport: Viewport): Position {
-    return {
-      x: world.x * viewport.zoom + viewport.x,
-      y: world.y * viewport.zoom + viewport.y,
-    };
+    return CoordinateManager.boardToScreen(world, viewport);
   },
 };
 

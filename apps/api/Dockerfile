@@ -9,8 +9,9 @@ ENV PYTHONUNBUFFERED=1 \
 # Install uv for fast dependency management
 COPY --from=ghcr.io/astral-sh/uv:latest /uv /bin/uv
 
-# Copy project specification
-COPY pyproject.toml .
+# Copy project specification and source needed for editable install
+COPY pyproject.toml README.md ./
+COPY app ./app
 
 # Install dependencies using uv
 RUN uv pip install --system -e ".[dev]"

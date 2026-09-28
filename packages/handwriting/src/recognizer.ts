@@ -2,20 +2,15 @@ import { Stroke, type StrokePoint } from './stroke';
 import { PointCloud } from './point_cloud';
 import { TemplateStore } from './template_store';
 import { CANONICAL_TEMPLATES } from './canonical_templates';
+import {
+  type RecognizedSymbol,
+  type SymbolCategory,
+  SpatialRelationAnalyzer,
+} from './spatial_relations';
+import { StructuralTreeBuilder, type MathStructureNode } from './math_structure';
+import type { MathASTNode } from '@mathboard/shared';
 
-export interface RecognizedGlyph {
-  symbol: string;
-  latex: string;
-  confidence: number;
-  bbox: {
-    minX: number;
-    maxX: number;
-    minY: number;
-    maxY: number;
-    centerX: number;
-    centerY: number;
-  };
-}
+export interface RecognizedGlyph extends RecognizedSymbol {}
 
 export class MathematicalStrokeRecognizer {
   /**
@@ -60,9 +55,9 @@ export class MathematicalStrokeRecognizer {
 
   /**
    * Classifies a cluster of strokes using the hybrid $P Point Cloud engine,
-   * evaluating against both canonical and multi-example user calibrated templates.
+   * computing the exact bounding box, category, and mathematical baseline.
    */
-  static classifyCluster(cluster: Stroke[], profileId?: string): RecognizedGlyph {
+  static classifyCluster(cluster: Stroke[], profileId?: string): RecognizedSymbol {
     // 1. Calculate combined bounding box
     let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
     let anyLoop = false;
@@ -80,34 +75,77 @@ export class MathematicalStrokeRecognizer {
     const aspect = width / height;
 
     const bbox = {
-      minX, maxX, minY, maxY,
+      minX, maxX, minY, maxY, width, height,
       centerX: (minX + maxX) / 2,
       centerY: (minY + maxY) / 2,
     };
+
+    const id = `sym_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`;
 
     // Fast-path for distinct geometric operators:
     // A. Two horizontal parallel strokes is definitely '='
     if (cluster.length === 2) {
       const [s1, s2] = cluster;
       if (s1.isHorizontalLine && s2.isHorizontalLine) {
-        return { symbol: '=', latex: '=', confidence: 0.98, bbox };
+        return {
+          id,
+          symbol: '=',
+          latex: '=',
+          category: 'operator',
+          confidence: 0.98,
+          bbox,
+          baseline: bbox.centerY,
+          centerX: bbox.centerX,
+          centerY: bbox.centerY,
+        };
       }
       if (
         (s1.isHorizontalLine && s2.isVerticalLine) ||
         (s2.isHorizontalLine && s1.isVerticalLine)
       ) {
-        return { symbol: '+', latex: '+', confidence: 0.95, bbox };
+        return {
+          id,
+          symbol: '+',
+          latex: '+',
+          category: 'operator',
+          confidence: 0.95,
+          bbox,
+          baseline: bbox.centerY,
+          centerX: bbox.centerX,
+          centerY: bbox.centerY,
+        };
       }
     }
 
-    // B. Single horizontal line is definitely '-'
+    // B. Single horizontal line: either minus sign '-' or fraction bar
     if (cluster.length === 1 && cluster[0].isHorizontalLine) {
-      return { symbol: '-', latex: '-', confidence: 0.98, bbox };
+      const category: SymbolCategory = width > 2.2 * height && width > 25 ? 'fraction_bar' : 'operator';
+      return {
+        id,
+        symbol: '-',
+        latex: '-',
+        category,
+        confidence: 0.98,
+        bbox,
+        baseline: bbox.centerY,
+        centerX: bbox.centerX,
+        centerY: bbox.centerY,
+      };
     }
 
     // C. Single vertical line is definitely '1'
     if (cluster.length === 1 && cluster[0].isVerticalLine && aspect < 0.25) {
-      return { symbol: '1', latex: '1', confidence: 0.96, bbox };
+      return {
+        id,
+        symbol: '1',
+        latex: '1',
+        category: 'digit',
+        confidence: 0.96,
+        bbox,
+        baseline: bbox.minY + bbox.height * 0.88,
+        centerX: bbox.centerX,
+        centerY: bbox.centerY,
+      };
     }
 
     // 2. Prepare normalized candidate point cloud
@@ -149,8 +187,7 @@ export class MathematicalStrokeRecognizer {
       // Calculate Point Cloud Distance
       const rawDist = PointCloud.cloudDistance(candidateCloud, t.points);
 
-      // Multi-example & personalization preference:
-      // If template is custom created by teacher/student, award a 18% bonus
+      // Multi-example & personalization preference
       const isCustom = 'createdAt' in t || 'profileId' in t;
       const userWeight = isCustom ? 0.82 : 1.0;
 
@@ -163,24 +200,36 @@ export class MathematicalStrokeRecognizer {
       }
     }
 
-    // Calculate confidence from distance
     const confidence = Math.max(0.4, Math.min(0.99, 1.0 - minWeightedDistance * 1.5));
+    const category = SpatialRelationAnalyzer.categorizeSymbol(bestSymbol, bbox);
+    const baseline = SpatialRelationAnalyzer.computeBaseline(bestSymbol, bbox, category);
 
     return {
+      id,
       symbol: bestSymbol,
       latex: bestLatex,
+      category,
       confidence: Number(confidence.toFixed(2)),
       bbox,
+      baseline,
+      centerX: bbox.centerX,
+      centerY: bbox.centerY,
     };
   }
 
   /**
-   * Recognize complete formula from drawn strokes and return clean LaTeX
+   * Recognizes drawn strokes into mathematical structures using the 2D spatial relationships pipeline.
+   * Returns clean LaTeX, recognized symbols, structural tree, and computational AST.
    */
   static recognizeStrokesToLatex(
     rawStrokesPoints: StrokePoint[][],
     profileId?: string
-  ): { latex: string; glyphs: RecognizedGlyph[] } {
+  ): {
+    latex: string;
+    glyphs: RecognizedSymbol[];
+    tree?: MathStructureNode;
+    ast?: MathASTNode;
+  } {
     if (rawStrokesPoints.length === 0) return { latex: '', glyphs: [] };
 
     const strokes = rawStrokesPoints
@@ -190,38 +239,21 @@ export class MathematicalStrokeRecognizer {
     if (strokes.length === 0) return { latex: '', glyphs: [] };
 
     const clusters = this.clusterStrokes(strokes);
-    const glyphs = clusters.map((c) => this.classifyCluster(c, profileId));
+    const symbols = clusters.map((c) => this.classifyCluster(c, profileId));
 
-    // Sort glyphs left to right by their horizontal center
-    glyphs.sort((a, b) => a.bbox.centerX - b.bbox.centerX);
+    // Sort symbols left to right by their horizontal center
+    symbols.sort((a, b) => a.centerX - b.centerX);
 
-    // Compute average height to detect exponents (superscripts)
-    const avgHeight = glyphs.reduce((sum, g) => sum + (g.bbox.maxY - g.bbox.minY), 0) / glyphs.length;
-    const avgCenterY = glyphs.reduce((sum, g) => sum + g.bbox.centerY, 0) / glyphs.length;
-
-    let latex = '';
-    for (let i = 0; i < glyphs.length; i++) {
-      const g = glyphs[i];
-      const gHeight = g.bbox.maxY - g.bbox.minY;
-
-      // Check if this glyph is a superscript/exponent:
-      // Smaller height and significantly higher than average center
-      const isExponent = i > 0 && gHeight < avgHeight * 0.75 && g.bbox.centerY < avgCenterY - avgHeight * 0.3;
-
-      if (isExponent) {
-        latex += `^{${g.latex}}`;
-      } else {
-        if (i > 0 && ['+', '-', '=', '\\int'].includes(g.latex)) {
-          latex += ` ${g.latex} `;
-        } else {
-          latex += g.latex;
-        }
-      }
-    }
+    // Build the hierarchical mathematical structure tree
+    const tree = StructuralTreeBuilder.buildTree(symbols);
+    const latex = StructuralTreeBuilder.toLatex(tree);
+    const ast = StructuralTreeBuilder.toAST(tree);
 
     return {
       latex: latex.trim(),
-      glyphs,
+      glyphs: symbols,
+      tree,
+      ast,
     };
   }
 }
