@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
-import { render, screen, waitFor } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import App from '../src/App';
 
 // Mock fetch to simulate healthcheck response
@@ -26,26 +26,26 @@ globalThis.fetch = vi.fn().mockImplementation((url: string | URL | Request) => {
   });
 });
 
-describe('MathBoard App (Phase 0)', () => {
-  it('renders the MathBoard title and Fase 0 badge', async () => {
+describe('MathBoard App (Phases 1 to 8)', () => {
+  it('renders the white canvas whiteboard with toolbar by default', () => {
     render(<App />);
     expect(screen.getByText('MathBoard')).toBeInTheDocument();
-    expect(screen.getByText('Fase 0 Activa')).toBeInTheDocument();
-    await waitFor(() => {
-      expect(screen.getByText('API Connected')).toBeInTheDocument();
-    });
+    expect(screen.getByText('Fases 1–8 Completadas')).toBeInTheDocument();
+    expect(screen.getByText('Tablero Blanco')).toBeInTheDocument();
+    expect(screen.getByText('Seleccionar')).toBeInTheDocument();
   });
 
-  it('renders the monorepo packages section', async () => {
+  it('allows switching to Diagnostics and viewing packages status', async () => {
     render(<App />);
-    expect(screen.getByText('@mathboard/shared')).toBeInTheDocument();
-    expect(screen.getByText('@mathboard/core')).toBeInTheDocument();
-    expect(screen.getByText('@mathboard/parser')).toBeInTheDocument();
-    expect(screen.getByText('@mathboard/math-engine')).toBeInTheDocument();
-    expect(screen.getByText('@mathboard/visualization')).toBeInTheDocument();
+    const diagBtn = screen.getByText('Diagnóstico & Arquitectura');
+    fireEvent.click(diagBtn);
+
+    expect(screen.getByText('Paquetes del Monorepo Activos')).toBeInTheDocument();
+    expect(screen.getByText('@mathboard/geometry-core')).toBeInTheDocument();
+    expect(screen.getByText('@mathboard/physics-core')).toBeInTheDocument();
+
     await waitFor(() => {
       expect(screen.getByText('API Connected')).toBeInTheDocument();
     });
   });
 });
-

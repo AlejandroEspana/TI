@@ -1,12 +1,13 @@
 import { useState } from 'react';
 import { Calculator, ArrowRight, Sparkles, AlertCircle } from 'lucide-react';
-import { solveEquation, type SolveResult } from '../services/api';
+import { solveEquation } from '../services/api';
+import type { MathSolveResponse } from '@mathboard/shared';
 
 export function MathSolverCard() {
   const [expression, setExpression] = useState('2*x^2 + 5*x - 3 = 0');
   const [variable, setVariable] = useState('x');
   const [loading, setLoading] = useState(false);
-  const [result, setResult] = useState<SolveResult | null>(null);
+  const [result, setResult] = useState<MathSolveResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   const handleSolve = async (e: React.FormEvent) => {
@@ -94,7 +95,7 @@ export function MathSolverCard() {
             </div>
             <div className="flex flex-wrap gap-2 pt-1">
               {result.result.length > 0 ? (
-                result.result.map((root, idx) => (
+                result.result.map((root: string, idx: number) => (
                   <span
                     key={idx}
                     className="font-mono text-sm px-2.5 py-1 rounded bg-slate-900 border border-slate-700/80 text-emerald-400 font-semibold shadow-inner"
