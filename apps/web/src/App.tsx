@@ -6,10 +6,11 @@ import { Layers, CheckCircle, Compass, Layout } from 'lucide-react';
 
 const PACKAGES = [
   { name: '@mathboard/shared', desc: 'Interfaces base, AST y contratos del tablero', status: 'Ready' },
-  { name: '@mathboard/core', desc: 'Command Pattern (Undo/Redo), ObjectManager y viewport', status: 'Ready' },
+  { name: '@mathboard/core', desc: 'Command Pattern (Undo/Redo), ObjectManager y BoardScope', status: 'Ready' },
+  { name: '@mathboard/handwriting', desc: 'Reconocimiento de trazos manuscritos y digitalización a LaTeX', status: 'Ready' },
   { name: '@mathboard/parser', desc: 'Lexer, Tokenizer y Clasificador Semántico propio', status: 'Ready' },
   { name: '@mathboard/math-engine', desc: 'ActionRegistry y operaciones deterministas desacopladas', status: 'Ready' },
-  { name: '@mathboard/visualization', desc: 'Evaluador cartesiano y cálculo de raíces 2D', status: 'Ready' },
+  { name: '@mathboard/visualization', desc: 'Evaluador cartesiano 2D, trazador 3D orbital y cálculo de raíces', status: 'Ready' },
   { name: '@mathboard/geometry-core', desc: 'Vectores, distancias, áreas e intersecciones 2D', status: 'Ready' },
   { name: '@mathboard/physics-core', desc: 'Mecánica newtoniana, integrador Verlet y conservación de energía', status: 'Ready' },
 ];
@@ -19,11 +20,14 @@ const PHASES = [
   { phase: '1', title: 'Smart Canvas Blanco', done: true },
   { phase: '2', title: 'Editor (KaTeX/LaTeX)', done: true },
   { phase: '3', title: 'Parser & AST Semántico', done: true },
-  { phase: '4', title: 'Math Engine (SymPy/NumPy)', done: true },
+  { phase: '4', title: 'Math Engine (SymPy)', done: true },
   { phase: '5', title: 'Transformation / Steps', done: true },
   { phase: '6', title: 'Graph Engine 2D', done: true },
   { phase: '7', title: 'Geometría Computacional', done: true },
   { phase: '8', title: 'Physics Engine 2D', done: true },
+  { phase: '9', title: 'Visualización 3D', done: true },
+  { phase: '10', title: 'Reconocimiento Manuscrito', done: true },
+  { phase: '11', title: 'Sistema Educativo & Scope', done: true },
 ];
 
 export function App() {
@@ -41,7 +45,7 @@ export function App() {
             MathBoard
           </span>
           <span className="text-[11px] font-mono px-2 py-0.5 rounded-full bg-emerald-50 border border-emerald-200 text-emerald-700 font-semibold">
-            Fases 1–8 Completadas
+            Fases 1–11 Completadas
           </span>
         </div>
 

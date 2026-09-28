@@ -6,6 +6,7 @@ import {
   MoveObjectCommand,
   DeleteObjectCommand,
   defaultCoordinateTransformer,
+  BoardScope,
   type Viewport,
 } from '@mathboard/core';
 import type {
@@ -14,6 +15,8 @@ import type {
   GraphBoardObject,
   GeometryBoardObject,
   PhysicsBoardObject,
+  Graph3DBoardObject,
+  ExerciseBoardObject,
   MathStep,
 } from '@mathboard/shared';
 import { CanvasToolbar, type ToolMode } from './CanvasToolbar';
@@ -22,7 +25,11 @@ import { MathEditorModal } from './MathEditorModal';
 import { GraphCard } from './GraphCard';
 import { GeometryCard } from './GeometryCard';
 import { PhysicsCard } from './PhysicsCard';
+import { Graph3DCard } from './Graph3DCard';
+import { ExerciseCard } from './ExerciseCard';
 import { StepsModal } from './StepsModal';
+import { HandwritingLayer } from './HandwritingLayer';
+import { VariableScopePanel } from './VariableScopePanel';
 import {
   solveEquation,
   fetchSteps,
@@ -43,6 +50,11 @@ export function MathBoardCanvas() {
   const [currentTool, setCurrentTool] = useState<ToolMode>('select');
   const [objects, setObjects] = useState<BoardObject[]>([]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
+
+  // Variables Scope
+  const scopeRef = useRef<BoardScope>(new BoardScope({ a: 2, b: -3, m: 2 }));
+  const [variables, setVariables] = useState<Record<string, number | string>>({ a: 2, b: -3, m: 2 });
+  const [showVariables, setShowVariables] = useState(false);
 
   // Modals state
   const [editorOpen, setEditorOpen] = useState(false);
@@ -71,6 +83,14 @@ export function MathBoardCanvas() {
     setCanRedo(historyRef.current.canRedo);
   }, []);
 
+  // Listen to scope changes
+  useEffect(() => {
+    const unsub = scopeRef.current.subscribe((vars) => {
+      setVariables({ ...vars });
+    });
+    return unsub;
+  }, []);
+
   // Initial demo setup
   useEffect(() => {
     const manager = managerRef.current;
@@ -97,11 +117,23 @@ export function MathBoardCanvas() {
       domain: [-4, 3],
       showRoots: true,
       color: '#4f46e5',
-      position: { x: 500, y: 80 },
+      position: { x: 480, y: 80 },
     };
     manager.addObject(initialGraph);
 
-    // 3. Initial Geometry Object (Vector)
+    // 3. Initial 3D Surface Object (Fase 9)
+    const initial3D: Graph3DBoardObject = {
+      id: 'graph3d-init',
+      type: 'graph3d',
+      expression: 'x^2 - y^2', // hyperbolic paraboloid (saddle)
+      xDomain: [-3, 3],
+      yDomain: [-3, 3],
+      rotation: { theta: 0.8, phi: 0.5 },
+      position: { x: 860, y: 80 },
+    };
+    manager.addObject(initial3D);
+
+    // 4. Initial Geometry Object (Vector)
     const initialGeo: GeometryBoardObject = {
       id: 'geo-init',
       type: 'geometry',
@@ -116,7 +148,7 @@ export function MathBoardCanvas() {
     };
     manager.addObject(initialGeo);
 
-    // 4. Initial Physics Simulation Object
+    // 5. Initial Physics Simulation Object
     const initialPhys: PhysicsBoardObject = {
       id: 'phys-init',
       type: 'physics',
@@ -125,9 +157,22 @@ export function MathBoardCanvas() {
       acceleration: { x: 0, y: 39.24 },
       radius: 7,
       color: '#ea580c',
-      position: { x: 500, y: 390 },
+      position: { x: 480, y: 390 },
     };
     manager.addObject(initialPhys);
+
+    // 6. Initial Educational Challenge Card (Fase 11)
+    const initialExercise: ExerciseBoardObject = {
+      id: 'exercise-init',
+      type: 'exercise',
+      title: 'Factorización de Polinomios',
+      topic: 'algebra',
+      problemStatement: 'Factoriza la diferencia de cuadrados: x² - 9',
+      expectedAnswer: '(x - 3)*(x + 3)',
+      hint: 'Aplica la regla a² - b² = (a - b)(a + b) con b = 3',
+      position: { x: 860, y: 390 },
+    };
+    manager.addObject(initialExercise);
 
     syncState();
   }, [syncState]);
@@ -155,6 +200,7 @@ export function MathBoardCanvas() {
         handleRedo();
       } else if (e.key === 'v') setCurrentTool('select');
       else if (e.key === 'h') setCurrentTool('pan');
+      else if (e.key === 'w') setCurrentTool('pencil');
       else if (e.key === 'm') setEditorOpen(true);
     };
     window.addEventListener('keydown', handleKeyDown);
@@ -164,7 +210,6 @@ export function MathBoardCanvas() {
   // Canvas Mouse Handlers
   const handleMouseDown = (e: React.MouseEvent) => {
     if (e.button === 1 || currentTool === 'pan' || (e.button === 0 && e.target === e.currentTarget)) {
-      // Background Pan
       isPanningRef.current = true;
       panStartRef.current = { x: e.clientX - viewport.x, y: e.clientY - viewport.y };
       setSelectedId(null);
@@ -225,7 +270,7 @@ export function MathBoardCanvas() {
 
   // Object dragging start
   const handleObjectDragStart = (e: React.MouseEvent, obj: BoardObject) => {
-    if (currentTool === 'pan') return;
+    if (currentTool === 'pan' || currentTool === 'pencil') return;
     e.stopPropagation();
     setSelectedId(obj.id);
     draggingIdRef.current = obj.id;
@@ -241,22 +286,70 @@ export function MathBoardCanvas() {
     syncState();
   };
 
-  // Add Math Object from Modal
-  const handleAddMathObject = (latex: string) => {
-    const centerWorld = defaultCoordinateTransformer.screenToWorld(
+  // Add Math Object from Modal or Handwriting
+  const handleAddMathObject = (latex: string, positionOverride?: { x: number; y: number }) => {
+    const centerWorld = positionOverride || defaultCoordinateTransformer.screenToWorld(
       { x: window.innerWidth / 2, y: window.innerHeight / 2 },
       viewport
     );
+
+    // Check if this is an assignment: e.g. "a = 5"
+    const assignment = BoardScope.parseAssignment(latex);
+    if (assignment) {
+      scopeRef.current.setVariable(assignment.variable, assignment.value);
+    }
+
     const newMath: MathBoardObject = {
       id: `math-${Date.now()}`,
       type: 'math',
       latex,
-      source: 'keyboard',
-      semanticType: 'equation',
+      source: positionOverride ? 'handwriting' : 'keyboard',
+      semanticType: assignment ? 'equation' : 'expression',
       variable: 'x',
-      position: { x: centerWorld.x - 100, y: centerWorld.y - 40 },
+      position: { x: centerWorld.x, y: centerWorld.y },
     };
     const cmd = new AddObjectCommand(managerRef.current, newMath);
+    historyRef.current.execute(cmd);
+    syncState();
+  };
+
+  // Add 3D Graph Object (Fase 9)
+  const handleAddGraph3D = () => {
+    const centerWorld = defaultCoordinateTransformer.screenToWorld(
+      { x: window.innerWidth / 2, y: window.innerHeight / 2 },
+      viewport
+    );
+    const new3D: Graph3DBoardObject = {
+      id: `graph3d-${Date.now()}`,
+      type: 'graph3d',
+      expression: 'x^2 + y^2',
+      xDomain: [-3, 3],
+      yDomain: [-3, 3],
+      rotation: { theta: 0.8, phi: 0.5 },
+      position: { x: centerWorld.x - 160, y: centerWorld.y - 110 },
+    };
+    const cmd = new AddObjectCommand(managerRef.current, new3D);
+    historyRef.current.execute(cmd);
+    syncState();
+  };
+
+  // Add Educational Exercise Card (Fase 11)
+  const handleAddExercise = () => {
+    const centerWorld = defaultCoordinateTransformer.screenToWorld(
+      { x: window.innerWidth / 2, y: window.innerHeight / 2 },
+      viewport
+    );
+    const newEx: ExerciseBoardObject = {
+      id: `exercise-${Date.now()}`,
+      type: 'exercise',
+      title: 'Derivada de una Función',
+      topic: 'calculus',
+      problemStatement: 'Calcula la derivada d/dx de: f(x) = 3x² + 4x',
+      expectedAnswer: '6*x + 4',
+      hint: 'Aplica la regla de la potencia: d/dx(x^n) = n*x^(n-1)',
+      position: { x: centerWorld.x - 160, y: centerWorld.y - 100 },
+    };
+    const cmd = new AddObjectCommand(managerRef.current, newEx);
     historyRef.current.execute(cmd);
     syncState();
   };
@@ -329,7 +422,9 @@ export function MathBoardCanvas() {
   // Math Operations Execution
   const handleSolveMath = async (mathObj: MathBoardObject) => {
     try {
-      const res = await solveEquation(mathObj.latex, mathObj.variable || 'x');
+      // Substitute active scope variables before solving if present
+      const substituted = scopeRef.current.substituteVariables(mathObj.latex);
+      const res = await solveEquation(substituted, mathObj.variable || 'x');
       managerRef.current.updateObject(mathObj.id, {
         solutions: res.result,
       } as unknown as Partial<BoardObject>);
@@ -341,7 +436,8 @@ export function MathBoardCanvas() {
 
   const handleShowSteps = async (mathObj: MathBoardObject) => {
     try {
-      const res = await fetchSteps(mathObj.latex, mathObj.variable || 'x');
+      const substituted = scopeRef.current.substituteVariables(mathObj.latex);
+      const res = await fetchSteps(substituted, mathObj.variable || 'x');
       setStepsModal({ open: true, expr: mathObj.latex, steps: res.steps });
     } catch (err: unknown) {
       alert(`Error en pasos: ${err instanceof Error ? err.message : String(err)}`);
@@ -350,8 +446,8 @@ export function MathBoardCanvas() {
 
   const handleDerivative = async (mathObj: MathBoardObject) => {
     try {
-      const res = await fetchDerivative(mathObj.latex, mathObj.variable || 'x');
-      // Create new derivative math object beside it
+      const substituted = scopeRef.current.substituteVariables(mathObj.latex);
+      const res = await fetchDerivative(substituted, mathObj.variable || 'x');
       const newObj: MathBoardObject = {
         id: `math-diff-${Date.now()}`,
         type: 'math',
@@ -370,7 +466,8 @@ export function MathBoardCanvas() {
 
   const handleIntegral = async (mathObj: MathBoardObject) => {
     try {
-      const res = await fetchIntegral(mathObj.latex, mathObj.variable || 'x');
+      const substituted = scopeRef.current.substituteVariables(mathObj.latex);
+      const res = await fetchIntegral(substituted, mathObj.variable || 'x');
       const newObj: MathBoardObject = {
         id: `math-int-${Date.now()}`,
         type: 'math',
@@ -392,10 +489,12 @@ export function MathBoardCanvas() {
     if (cleanExpr.includes('=')) {
       cleanExpr = cleanExpr.split('=')[0];
     }
+    const substituted = scopeRef.current.substituteVariables(cleanExpr);
+
     const newGraph: GraphBoardObject = {
       id: `graph-from-${Date.now()}`,
       type: 'graph',
-      expression: cleanExpr,
+      expression: substituted,
       variable: mathObj.variable || 'x',
       domain: [-6, 6],
       showRoots: true,
@@ -414,6 +513,12 @@ export function MathBoardCanvas() {
       setEditorOpen(true);
     } else if (tool === 'graph') {
       handleAddGraph();
+      setCurrentTool('select');
+    } else if (tool === 'graph3d') {
+      handleAddGraph3D();
+      setCurrentTool('select');
+    } else if (tool === 'exercise') {
+      handleAddExercise();
       setCurrentTool('select');
     } else if (tool === 'geometry') {
       handleAddGeometry();
@@ -462,6 +567,8 @@ export function MathBoardCanvas() {
         onResetView={() => setViewport({ x: 100, y: 100, zoom: 1.0 })}
         onExportJSON={handleExportJSON}
         onClear={handleClear}
+        onToggleVariables={() => setShowVariables((prev) => !prev)}
+        variablesCount={Object.keys(variables).length}
         zoom={viewport.zoom}
       />
 
@@ -472,6 +579,14 @@ export function MathBoardCanvas() {
           backgroundPosition: `${viewport.x}px ${viewport.y}px`,
           backgroundSize: `${24 * viewport.zoom}px ${24 * viewport.zoom}px`,
         }}
+      />
+
+      {/* Freehand Handwriting Layer (Fase 10) */}
+      <HandwritingLayer
+        isActive={currentTool === 'pencil'}
+        onClose={() => setCurrentTool('select')}
+        onDigitalize={(latex, pos) => handleAddMathObject(latex, pos)}
+        viewport={viewport}
       />
 
       {/* Transformed Objects Container */}
@@ -490,7 +605,7 @@ export function MathBoardCanvas() {
               onMouseDown={(e) => handleObjectDragStart(e, obj)}
               style={{
                 transform: `translate(${obj.position.x}px, ${obj.position.y}px)`,
-                cursor: currentTool === 'pan' ? 'grab' : 'move',
+                cursor: currentTool === 'pan' ? 'grab' : currentTool === 'pencil' ? 'crosshair' : 'move',
               }}
               className={`absolute group transition-shadow ${
                 isSelected ? 'ring-2 ring-indigo-500 rounded-2xl shadow-xl' : 'hover:shadow-lg'
@@ -601,31 +716,44 @@ export function MathBoardCanvas() {
 
               {obj.type === 'graph' && <GraphCard graph={obj as GraphBoardObject} />}
 
+              {obj.type === 'graph3d' && <Graph3DCard graph3d={obj as Graph3DBoardObject} />}
+
               {obj.type === 'geometry' && <GeometryCard geo={obj as GeometryBoardObject} />}
 
               {obj.type === 'physics' && <PhysicsCard physicsObj={obj as PhysicsBoardObject} />}
+
+              {obj.type === 'exercise' && <ExerciseCard exercise={obj as ExerciseBoardObject} />}
             </div>
           );
         })}
       </div>
 
       {/* Floating Canvas Meta Badge */}
-      <div className="fixed bottom-4 left-4 z-40 bg-white/90 backdrop-blur-md border border-slate-200 px-3 py-1.5 rounded-xl shadow-sm flex items-center gap-3 text-xs text-slate-500 font-mono">
+      <div className="fixed bottom-4 left-4 z-30 bg-white/90 backdrop-blur-md border border-slate-200 px-3 py-1.5 rounded-xl shadow-sm flex items-center gap-3 text-xs text-slate-500 font-mono">
         <span className="flex items-center gap-1.5 text-slate-700 font-medium">
           <Activity className="w-3.5 h-3.5 text-emerald-500" />
-          <span>Fases 1–8 Activas</span>
+          <span>Fases 1–11 Activas</span>
         </span>
         <span className="text-slate-300">|</span>
         <span>Objetos: {objects.length}</span>
         <span className="text-slate-300">|</span>
-        <span>Pos: ({Math.round(viewport.x)}, {Math.round(viewport.y)})</span>
+        <span>Variables: {Object.keys(variables).length}</span>
       </div>
+
+      {/* Variable Scope Drawer Panel */}
+      <VariableScopePanel
+        isOpen={showVariables}
+        onClose={() => setShowVariables(false)}
+        variables={variables}
+        onSetVariable={(name, val) => scopeRef.current.setVariable(name, val)}
+        onRemoveVariable={(name) => scopeRef.current.removeVariable(name)}
+      />
 
       {/* Math Editor Modal */}
       <MathEditorModal
         isOpen={editorOpen}
         onClose={() => setEditorOpen(false)}
-        onSave={handleAddMathObject}
+        onSave={(latex) => handleAddMathObject(latex)}
       />
 
       {/* Step by step Viewer Modal */}

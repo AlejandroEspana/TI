@@ -1,5 +1,7 @@
 import type { GraphBoardObject } from '@mathboard/shared';
 
+export * from './graph3d';
+
 export interface PlotDataPoint {
   x: number;
   y: number;

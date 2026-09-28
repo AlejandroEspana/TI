@@ -14,6 +14,7 @@
   "dependencies": {
     "@mathboard/core": "*",
     "@mathboard/geometry-core": "*",
+    "@mathboard/handwriting": "*",
     "@mathboard/math-engine": "*",
     "@mathboard/parser": "*",
     "@mathboard/physics-core": "*",

@@ -106,3 +106,22 @@ export async function fetchFactor(expression: string): Promise<{ expression: str
   }
   return response.json();
 }
+
+export interface VerifyAnswerResponse {
+  is_correct: boolean;
+  feedback: string;
+  latex_canonical: string;
+}
+
+export async function verifyAnswer(studentAnswer: string, expectedAnswer: string): Promise<VerifyAnswerResponse> {
+  const response = await fetch(`${API_BASE_URL}/api/v1/education/verify`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ student_answer: studentAnswer, expected_answer: expectedAnswer }),
+  });
+  if (!response.ok) {
+    const err = await response.json().catch(() => ({ detail: 'Verification failed' }));
+    throw new Error(err.detail || 'Verification failed');
+  }
+  return response.json();
+}

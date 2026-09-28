@@ -1,5 +1,7 @@
 import type { BoardObject, Position } from '@mathboard/shared';
 
+export * from './scope';
+
 export interface Viewport {
   x: number;
   y: number;

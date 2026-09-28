@@ -13,7 +13,7 @@ export interface Size {
   height: number;
 }
 
-export type BoardObjectType = 'text' | 'math' | 'geometry' | 'graph' | 'physics';
+export type BoardObjectType = 'text' | 'math' | 'geometry' | 'graph' | 'physics' | 'graph3d' | 'exercise';
 
 export interface BoardObject {
   id: string;
@@ -121,6 +121,30 @@ export interface PhysicsBoardObject extends BoardObject {
     potential: number;
     total: number;
   };
+}
+
+export interface Graph3DBoardObject extends BoardObject {
+  type: 'graph3d';
+  expression: string;
+  xDomain: [number, number];
+  yDomain: [number, number];
+  rotation: {
+    theta: number; // Azimuth
+    phi: number;   // Elevation
+  };
+  resolution?: number;
+  colorScheme?: 'spectral' | 'viridis' | 'coolwarm';
+}
+
+export interface ExerciseBoardObject extends BoardObject {
+  type: 'exercise';
+  title: string;
+  topic: 'algebra' | 'calculus' | 'physics' | 'geometry';
+  problemStatement: string;
+  expectedAnswer: string;
+  userAnswer?: string;
+  isCorrect?: boolean;
+  hint: string;
 }
 
 export interface MathSolveResponse {

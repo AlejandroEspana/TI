@@ -26,13 +26,14 @@ globalThis.fetch = vi.fn().mockImplementation((url: string | URL | Request) => {
   });
 });
 
-describe('MathBoard App (Phases 1 to 8)', () => {
+describe('MathBoard App (Phases 1 to 11)', () => {
   it('renders the white canvas whiteboard with toolbar by default', () => {
     render(<App />);
     expect(screen.getByText('MathBoard')).toBeInTheDocument();
-    expect(screen.getByText('Fases 1–8 Completadas')).toBeInTheDocument();
+    expect(screen.getByText('Fases 1–11 Completadas')).toBeInTheDocument();
     expect(screen.getByText('Tablero Blanco')).toBeInTheDocument();
-    expect(screen.getByText('Seleccionar')).toBeInTheDocument();
+    expect(screen.getByText('Puntero')).toBeInTheDocument();
+    expect(screen.getByText('Lápiz OCR')).toBeInTheDocument();
   });
 
   it('allows switching to Diagnostics and viewing packages status', async () => {
@@ -43,6 +44,7 @@ describe('MathBoard App (Phases 1 to 8)', () => {
     expect(screen.getByText('Paquetes del Monorepo Activos')).toBeInTheDocument();
     expect(screen.getByText('@mathboard/geometry-core')).toBeInTheDocument();
     expect(screen.getByText('@mathboard/physics-core')).toBeInTheDocument();
+    expect(screen.getByText('@mathboard/handwriting')).toBeInTheDocument();
 
     await waitFor(() => {
       expect(screen.getByText('API Connected')).toBeInTheDocument();
