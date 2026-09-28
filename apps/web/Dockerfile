@@ -3,7 +3,7 @@ FROM node:20-alpine AS build
 WORKDIR /app
 
 # Copy root workspace configurations
-COPY package.json package-lock.json* ./
+COPY package.json package-lock.json* tsconfig.json ./
 COPY packages/ ./packages/
 COPY apps/web/package.json ./apps/web/
 
