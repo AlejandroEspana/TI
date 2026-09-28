@@ -8,3 +8,5 @@ export * from './point_cloud';
 export * from './canonical_templates';
 export * from './template_store';
 export * from './recognizer';
+export * from './strikethrough';
+export * from './grouper';

@@ -57,6 +57,12 @@ export interface MathStep {
   explanation: string;
 }
 
+export interface StrokePointData {
+  x: number;
+  y: number;
+  time?: number;
+}
+
 export interface MathBoardObject extends BoardObject {
   type: 'math';
   latex: string;
@@ -68,6 +74,8 @@ export interface MathBoardObject extends BoardObject {
   domain?: string;
   solutions?: string[];
   steps?: MathStep[];
+  originalStrokes?: StrokePointData[][];
+  isTextNote?: boolean;
 }
 
 export interface TextBoardObject extends BoardObject {
@@ -75,6 +83,7 @@ export interface TextBoardObject extends BoardObject {
   content: string;
   fontSize?: number;
   color?: string;
+  originalStrokes?: StrokePointData[][];
 }
 
 export interface GraphBoardObject extends BoardObject {

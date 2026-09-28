@@ -19,6 +19,15 @@ import type {
   ExerciseBoardObject,
   MathStep,
 } from '@mathboard/shared';
+import {
+  MathematicalStrokeRecognizer,
+  StrikethroughDetector,
+  SpatialStrokeGrouper,
+  TemplateStore,
+  type StrokePoint,
+  type TargetBounds,
+  type StrokeCluster,
+} from '@mathboard/handwriting';
 import { CanvasToolbar, type ToolMode } from './CanvasToolbar';
 import { MathView } from './MathView';
 import { MathEditorModal } from './MathEditorModal';
@@ -28,7 +37,6 @@ import { PhysicsCard } from './PhysicsCard';
 import { Graph3DCard } from './Graph3DCard';
 import { ExerciseCard } from './ExerciseCard';
 import { StepsModal } from './StepsModal';
-import { HandwritingLayer } from './HandwritingLayer';
 import { HandwritingCalibrationModal } from './HandwritingCalibrationModal';
 import { VariableScopePanel } from './VariableScopePanel';
 import {
@@ -44,13 +52,23 @@ import {
   X,
   Divide,
   Activity,
+  Trash2,
+  Loader2,
 } from 'lucide-react';
+
+type WritingLifecycle =
+  | 'IDLE'
+  | 'WRITING'
+  | 'WAITING_FOR_PAUSE'
+  | 'INTERPRETING'
+  | 'DIGITALIZING';
 
 export function MathBoardCanvas() {
   const [viewport, setViewport] = useState<Viewport>({ x: 100, y: 100, zoom: 1.0 });
-  const [currentTool, setCurrentTool] = useState<ToolMode>('select');
+  const [currentTool, setCurrentTool] = useState<ToolMode>('pencil');
   const [objects, setObjects] = useState<BoardObject[]>([]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [hoveredId, setHoveredId] = useState<string | null>(null);
 
   // Variables Scope
   const scopeRef = useRef<BoardScope>(new BoardScope({ a: 2, b: -3, m: 2 }));
@@ -72,12 +90,22 @@ export function MathBoardCanvas() {
   const [canUndo, setCanUndo] = useState(false);
   const [canRedo, setCanRedo] = useState(false);
 
-  // Interaction refs
+  // Interaction refs for panning & dragging
   const isPanningRef = useRef(false);
   const panStartRef = useRef({ x: 0, y: 0 });
   const draggingIdRef = useRef<string | null>(null);
   const dragStartPosRef = useRef({ x: 0, y: 0 });
   const initialObjPosRef = useRef({ x: 0, y: 0 });
+
+  // Native In-Canvas Handwriting Engine state
+  const inkCanvasRef = useRef<HTMLCanvasElement>(null);
+  const [writingState, setWritingState] = useState<WritingLifecycle>('IDLE');
+  const [inkStrokes, setInkStrokes] = useState<StrokePoint[][]>([]);
+  const [currentStroke, setCurrentStroke] = useState<StrokePoint[]>([]);
+  const isDrawingInkRef = useRef(false);
+  const debounceTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const [activeInterpretingClusters, setActiveInterpretingClusters] = useState<StrokeCluster[]>([]);
+  const [strikethroughFlashId, setStrikethroughFlashId] = useState<string | null>(null);
 
   const syncState = useCallback(() => {
     setObjects(managerRef.current.getAllObjects());
@@ -97,7 +125,7 @@ export function MathBoardCanvas() {
   useEffect(() => {
     const manager = managerRef.current;
 
-    // 1. Initial Math Equation Object
+    // 1. Initial Math Equation Object (Borderless paper typography)
     const initialMath: MathBoardObject = {
       id: 'math-init',
       type: 'math',
@@ -119,7 +147,7 @@ export function MathBoardCanvas() {
       domain: [-4, 3],
       showRoots: true,
       color: '#4f46e5',
-      position: { x: 480, y: 80 },
+      position: { x: 500, y: 80 },
     };
     manager.addObject(initialGraph);
 
@@ -127,11 +155,11 @@ export function MathBoardCanvas() {
     const initial3D: Graph3DBoardObject = {
       id: 'graph3d-init',
       type: 'graph3d',
-      expression: 'x^2 - y^2', // hyperbolic paraboloid (saddle)
+      expression: 'x^2 - y^2',
       xDomain: [-3, 3],
       yDomain: [-3, 3],
       rotation: { theta: 0.8, phi: 0.5 },
-      position: { x: 860, y: 80 },
+      position: { x: 880, y: 80 },
     };
     manager.addObject(initial3D);
 
@@ -159,7 +187,7 @@ export function MathBoardCanvas() {
       acceleration: { x: 0, y: 39.24 },
       radius: 7,
       color: '#ea580c',
-      position: { x: 480, y: 390 },
+      position: { x: 500, y: 390 },
     };
     manager.addObject(initialPhys);
 
@@ -172,7 +200,7 @@ export function MathBoardCanvas() {
       problemStatement: 'Factoriza la diferencia de cuadrados: x² - 9',
       expectedAnswer: '(x - 3)*(x + 3)',
       hint: 'Aplica la regla a² - b² = (a - b)(a + b) con b = 3',
-      position: { x: 860, y: 390 },
+      position: { x: 880, y: 390 },
     };
     manager.addObject(initialExercise);
 
@@ -209,11 +237,203 @@ export function MathBoardCanvas() {
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [handleUndo, handleRedo]);
 
+  // Resize ink canvas
+  useEffect(() => {
+    const canvas = inkCanvasRef.current;
+    if (!canvas) return;
+    const handleResize = () => {
+      canvas.width = window.innerWidth;
+      canvas.height = window.innerHeight;
+    };
+    handleResize();
+    window.addEventListener('resize', handleResize);
+    return () => window.removeEventListener('resize', handleResize);
+  }, []);
+
+  // Redraw native ink strokes aligned with world viewport
+  useEffect(() => {
+    const canvas = inkCanvasRef.current;
+    if (!canvas) return;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
+
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+    const allStrokes = [...inkStrokes, ...(currentStroke.length > 0 ? [currentStroke] : [])];
+    if (allStrokes.length === 0) return;
+
+    // Ink style
+    ctx.strokeStyle = '#1e293b'; // crisp dark slate ink
+    ctx.lineWidth = Math.max(2.2, 3.2 * viewport.zoom);
+    ctx.lineCap = 'round';
+    ctx.lineJoin = 'round';
+
+    for (const stroke of allStrokes) {
+      if (stroke.length < 2) continue;
+      ctx.beginPath();
+      // Transform world coords to screen
+      const startScreenX = stroke[0].x * viewport.zoom + viewport.x;
+      const startScreenY = stroke[0].y * viewport.zoom + viewport.y;
+      ctx.moveTo(startScreenX, startScreenY);
+
+      for (let i = 1; i < stroke.length; i++) {
+        const sx = stroke[i].x * viewport.zoom + viewport.x;
+        const sy = stroke[i].y * viewport.zoom + viewport.y;
+        ctx.lineTo(sx, sy);
+      }
+      ctx.stroke();
+    }
+  }, [inkStrokes, currentStroke, viewport]);
+
+  // Delete Object with Command
+  const handleDeleteObject = useCallback((id: string) => {
+    const cmd = new DeleteObjectCommand(managerRef.current, id);
+    historyRef.current.execute(cmd);
+    if (selectedId === id) setSelectedId(null);
+    syncState();
+  }, [selectedId, syncState]);
+
+  // Digitalization & Interpretation Process (fired by 2-second inactivity debounce)
+  const processPendingInkStrokes = useCallback(() => {
+    if (inkStrokes.length === 0) {
+      setWritingState('IDLE');
+      return;
+    }
+
+    // Step A: Check for Strikethrough (Tachado Gesture) to delete existing objects
+    const allObjects = managerRef.current.getAllObjects();
+    const targets: TargetBounds[] = allObjects.map((obj) => {
+      let width = 180;
+      let height = 45;
+      if (obj.type === 'math') {
+        width = Math.max(120, (obj as MathBoardObject).latex.length * 15);
+        height = 45;
+      }
+      return {
+        id: obj.id,
+        bbox: {
+          minX: obj.position.x,
+          maxX: obj.position.x + width,
+          minY: obj.position.y,
+          maxY: obj.position.y + height,
+          width,
+          height,
+          centerX: obj.position.x + width / 2,
+          centerY: obj.position.y + height / 2,
+        },
+      };
+    });
+
+    const lastStroke = inkStrokes[inkStrokes.length - 1];
+    if (lastStroke && lastStroke.length >= 2) {
+      const strikeMatch = StrikethroughDetector.detectStrikethrough(lastStroke, targets);
+      if (strikeMatch.isStrikethrough && strikeMatch.targetId) {
+        // Strikethrough recognized!
+        setStrikethroughFlashId(strikeMatch.targetId);
+        setTimeout(() => {
+          handleDeleteObject(strikeMatch.targetId!);
+          setStrikethroughFlashId(null);
+          setInkStrokes([]);
+          setWritingState('IDLE');
+        }, 350);
+        return;
+      }
+    }
+
+    // Step B: Spatial Grouping of strokes into lines/expressions
+    const clusters = SpatialStrokeGrouper.groupStrokes(inkStrokes);
+    if (clusters.length === 0) {
+      setWritingState('IDLE');
+      return;
+    }
+
+    setWritingState('INTERPRETING');
+    setActiveInterpretingClusters(clusters);
+
+    // Progressive recognition delay (~350ms) to communicate intelligence
+    setTimeout(() => {
+      const activeProfileId = TemplateStore.getInstance().getActiveProfile().id;
+
+      for (const cluster of clusters) {
+        const { latex } = MathematicalStrokeRecognizer.recognizeStrokesToLatex(
+          cluster.strokes,
+          activeProfileId
+        );
+        if (!latex) continue;
+
+        // Check if expression is an assignment: e.g. a = 5
+        const assignment = BoardScope.parseAssignment(latex);
+        if (assignment) {
+          scopeRef.current.setVariable(assignment.variable, assignment.value);
+        }
+
+        const newObj: MathBoardObject = {
+          id: `math-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+          type: 'math',
+          latex,
+          source: 'handwriting',
+          semanticType: assignment ? 'equation' : 'expression',
+          variable: 'x',
+          position: { x: cluster.bbox.minX, y: cluster.bbox.minY },
+          originalStrokes: cluster.strokes,
+        };
+
+        const cmd = new AddObjectCommand(managerRef.current, newObj);
+        historyRef.current.execute(cmd);
+      }
+
+      syncState();
+      setWritingState('DIGITALIZING');
+
+      // Cross-fade finish
+      setTimeout(() => {
+        setInkStrokes([]);
+        setActiveInterpretingClusters([]);
+        setWritingState('IDLE');
+      }, 300);
+    }, 380);
+  }, [inkStrokes, handleDeleteObject, syncState]);
+
+  // Restart 2-second debounce timer whenever user stops writing
+  const handleStrokeCompleted = useCallback(() => {
+    if (debounceTimerRef.current) {
+      clearTimeout(debounceTimerRef.current);
+    }
+    setWritingState('WAITING_FOR_PAUSE');
+    debounceTimerRef.current = setTimeout(() => {
+      processPendingInkStrokes();
+    }, 2000);
+  }, [processPendingInkStrokes]);
+
   // Canvas Mouse Handlers
   const handleMouseDown = (e: React.MouseEvent) => {
-    if (e.button === 1 || currentTool === 'pan' || (e.button === 0 && e.target === e.currentTarget)) {
+    // Middle button or Pan tool pans the canvas
+    if (e.button === 1 || currentTool === 'pan') {
       isPanningRef.current = true;
       panStartRef.current = { x: e.clientX - viewport.x, y: e.clientY - viewport.y };
+      setSelectedId(null);
+      return;
+    }
+
+    // Pencil tool on canvas: start drawing in world coordinates
+    if (currentTool === 'pencil' && (e.button === 0 && (e.target === e.currentTarget || (e.target as HTMLElement).tagName === 'CANVAS'))) {
+      isDrawingInkRef.current = true;
+      if (debounceTimerRef.current) {
+        clearTimeout(debounceTimerRef.current);
+      }
+      const worldPt = defaultCoordinateTransformer.screenToWorld(
+        { x: e.clientX, y: e.clientY },
+        viewport
+      );
+      const pt: StrokePoint = { x: worldPt.x, y: worldPt.y, time: Date.now() };
+      setCurrentStroke([pt]);
+      setWritingState('WRITING');
+      setSelectedId(null);
+      return;
+    }
+
+    // Default select tool on canvas click clears selection
+    if (currentTool === 'select' && e.target === e.currentTarget) {
       setSelectedId(null);
     }
   };
@@ -225,6 +445,13 @@ export function MathBoardCanvas() {
         x: e.clientX - panStartRef.current.x,
         y: e.clientY - panStartRef.current.y,
       }));
+    } else if (isDrawingInkRef.current) {
+      const worldPt = defaultCoordinateTransformer.screenToWorld(
+        { x: e.clientX, y: e.clientY },
+        viewport
+      );
+      const pt: StrokePoint = { x: worldPt.x, y: worldPt.y, time: Date.now() };
+      setCurrentStroke((prev) => [...prev, pt]);
     } else if (draggingIdRef.current) {
       const dx = (e.clientX - dragStartPosRef.current.x) / viewport.zoom;
       const dy = (e.clientY - dragStartPosRef.current.y) / viewport.zoom;
@@ -240,6 +467,17 @@ export function MathBoardCanvas() {
   const handleMouseUp = () => {
     if (isPanningRef.current) {
       isPanningRef.current = false;
+    }
+    if (isDrawingInkRef.current) {
+      isDrawingInkRef.current = false;
+      if (currentStroke.length > 1) {
+        const updated = [...inkStrokes, currentStroke];
+        setInkStrokes(updated);
+        setCurrentStroke([]);
+        handleStrokeCompleted();
+      } else {
+        setCurrentStroke([]);
+      }
     }
     if (draggingIdRef.current) {
       const obj = managerRef.current.getObject(draggingIdRef.current);
@@ -272,7 +510,7 @@ export function MathBoardCanvas() {
 
   // Object dragging start
   const handleObjectDragStart = (e: React.MouseEvent, obj: BoardObject) => {
-    if (currentTool === 'pan' || currentTool === 'pencil') return;
+    if (currentTool === 'pencil' || currentTool === 'pan') return;
     e.stopPropagation();
     setSelectedId(obj.id);
     draggingIdRef.current = obj.id;
@@ -280,22 +518,13 @@ export function MathBoardCanvas() {
     initialObjPosRef.current = { ...obj.position };
   };
 
-  // Delete Object with Command
-  const handleDeleteObject = (id: string) => {
-    const cmd = new DeleteObjectCommand(managerRef.current, id);
-    historyRef.current.execute(cmd);
-    if (selectedId === id) setSelectedId(null);
-    syncState();
-  };
-
-  // Add Math Object from Modal or Handwriting
-  const handleAddMathObject = (latex: string, positionOverride?: { x: number; y: number }) => {
-    const centerWorld = positionOverride || defaultCoordinateTransformer.screenToWorld(
+  // Add Math Object from Modal
+  const handleAddMathObject = (latex: string) => {
+    const centerWorld = defaultCoordinateTransformer.screenToWorld(
       { x: window.innerWidth / 2, y: window.innerHeight / 2 },
       viewport
     );
 
-    // Check if this is an assignment: e.g. "a = 5"
     const assignment = BoardScope.parseAssignment(latex);
     if (assignment) {
       scopeRef.current.setVariable(assignment.variable, assignment.value);
@@ -305,7 +534,7 @@ export function MathBoardCanvas() {
       id: `math-${Date.now()}`,
       type: 'math',
       latex,
-      source: positionOverride ? 'handwriting' : 'keyboard',
+      source: 'keyboard',
       semanticType: assignment ? 'equation' : 'expression',
       variable: 'x',
       position: { x: centerWorld.x, y: centerWorld.y },
@@ -424,7 +653,6 @@ export function MathBoardCanvas() {
   // Math Operations Execution
   const handleSolveMath = async (mathObj: MathBoardObject) => {
     try {
-      // Substitute active scope variables before solving if present
       const substituted = scopeRef.current.substituteVariables(mathObj.latex);
       const res = await solveEquation(substituted, mathObj.variable || 'x');
       managerRef.current.updateObject(mathObj.id, {
@@ -456,7 +684,7 @@ export function MathBoardCanvas() {
         latex: `\\frac{d}{dx}\\left(${mathObj.latex}\\right) = ${res.latex_result}`,
         source: 'keyboard',
         semanticType: 'derivative',
-        position: { x: mathObj.position.x, y: mathObj.position.y + 130 },
+        position: { x: mathObj.position.x, y: mathObj.position.y + 60 },
       };
       const cmd = new AddObjectCommand(managerRef.current, newObj);
       historyRef.current.execute(cmd);
@@ -476,7 +704,7 @@ export function MathBoardCanvas() {
         latex: `\\int \\left(${mathObj.latex}\\right) dx = ${res.latex_result}`,
         source: 'keyboard',
         semanticType: 'integral',
-        position: { x: mathObj.position.x, y: mathObj.position.y + 130 },
+        position: { x: mathObj.position.x, y: mathObj.position.y + 60 },
       };
       const cmd = new AddObjectCommand(managerRef.current, newObj);
       historyRef.current.execute(cmd);
@@ -501,7 +729,7 @@ export function MathBoardCanvas() {
       domain: [-6, 6],
       showRoots: true,
       color: '#2563eb',
-      position: { x: mathObj.position.x + 320, y: mathObj.position.y },
+      position: { x: mathObj.position.x + 280, y: mathObj.position.y },
     };
     const cmd = new AddObjectCommand(managerRef.current, newGraph);
     historyRef.current.execute(cmd);
@@ -515,19 +743,19 @@ export function MathBoardCanvas() {
       setEditorOpen(true);
     } else if (tool === 'graph') {
       handleAddGraph();
-      setCurrentTool('select');
+      setCurrentTool('pencil');
     } else if (tool === 'graph3d') {
       handleAddGraph3D();
-      setCurrentTool('select');
+      setCurrentTool('pencil');
     } else if (tool === 'exercise') {
       handleAddExercise();
-      setCurrentTool('select');
+      setCurrentTool('pencil');
     } else if (tool === 'geometry') {
       handleAddGeometry();
-      setCurrentTool('select');
+      setCurrentTool('pencil');
     } else if (tool === 'physics') {
       handleAddPhysics();
-      setCurrentTool('select');
+      setCurrentTool('pencil');
     }
   };
 
@@ -544,15 +772,19 @@ export function MathBoardCanvas() {
   };
 
   const handleClear = () => {
-    if (confirm('¿Deseas limpiar todos los objetos del tablero?')) {
+    if (confirm('¿Deseas limpiar todo el contenido del tablero?')) {
       managerRef.current.clear();
+      setInkStrokes([]);
+      setCurrentStroke([]);
       syncState();
     }
   };
 
   return (
     <div
-      className="relative w-screen h-screen overflow-hidden select-none bg-white cursor-default"
+      className={`relative w-screen h-screen overflow-hidden select-none bg-white ${
+        currentTool === 'pencil' ? 'cursor-crosshair' : currentTool === 'pan' ? 'cursor-grab' : 'cursor-default'
+      }`}
       onMouseDown={handleMouseDown}
       onMouseMove={handleMouseMove}
       onMouseUp={handleMouseUp}
@@ -575,7 +807,7 @@ export function MathBoardCanvas() {
         zoom={viewport.zoom}
       />
 
-      {/* Infinite White Canvas Layer with Dot Grid */}
+      {/* Infinite White Canvas Layer with Subtle Dot Grid */}
       <div
         className="absolute inset-0 canvas-dot-grid pointer-events-none"
         style={{
@@ -584,164 +816,251 @@ export function MathBoardCanvas() {
         }}
       />
 
-      {/* Freehand Handwriting Layer (Fase 10) */}
-      <HandwritingLayer
-        isActive={currentTool === 'pencil'}
-        onClose={() => setCurrentTool('select')}
-        onDigitalize={(latex, pos) => handleAddMathObject(latex, pos)}
-        viewport={viewport}
-        onOpenCalibration={() => setCalibrationOpen(true)}
+      {/* Native Ink HTML5 Canvas Layer (Runs smoothly across the whole viewport) */}
+      <canvas
+        ref={inkCanvasRef}
+        className="absolute inset-0 pointer-events-none z-10 block"
       />
+
+      {/* Progressive Recognition Indicators (Interpretando... status badge) */}
+      {writingState === 'INTERPRETING' && (
+        <div
+          className="absolute z-20 pointer-events-none flex items-center gap-1.5 px-2.5 py-1 bg-indigo-600/90 text-white text-xs font-semibold rounded-full shadow-lg backdrop-blur-sm animate-pulse"
+          style={{
+            transform: `translate(${
+              (activeInterpretingClusters[0]?.bbox.centerX || 100) * viewport.zoom + viewport.x - 45
+            }px, ${
+              (activeInterpretingClusters[0]?.bbox.minY || 100) * viewport.zoom + viewport.y - 30
+            }px)`,
+          }}
+        >
+          <Loader2 className="w-3.5 h-3.5 animate-spin" />
+          <span>Interpretando...</span>
+        </div>
+      )}
 
       {/* Transformed Objects Container */}
       <div
-        className="absolute origin-top-left"
+        className="absolute origin-top-left z-10"
         style={{
           transform: `translate(${viewport.x}px, ${viewport.y}px) scale(${viewport.zoom})`,
         }}
       >
         {objects.map((obj) => {
           const isSelected = selectedId === obj.id;
+          const isHovered = hoveredId === obj.id;
+          const isFlashingStrike = strikethroughFlashId === obj.id;
 
           return (
             <div
               key={obj.id}
+              onMouseEnter={() => setHoveredId(obj.id)}
+              onMouseLeave={() => setHoveredId(null)}
               onMouseDown={(e) => handleObjectDragStart(e, obj)}
               style={{
                 transform: `translate(${obj.position.x}px, ${obj.position.y}px)`,
                 cursor: currentTool === 'pan' ? 'grab' : currentTool === 'pencil' ? 'crosshair' : 'move',
               }}
-              className={`absolute group transition-shadow ${
-                isSelected ? 'ring-2 ring-indigo-500 rounded-2xl shadow-xl' : 'hover:shadow-lg'
+              className={`absolute group transition-all duration-200 ${
+                isFlashingStrike ? 'opacity-30 scale-95 transition-all duration-300' : ''
               }`}
             >
-              {/* Delete button on hover/selected */}
-              <button
-                onClick={(e) => {
-                  e.stopPropagation();
-                  handleDeleteObject(obj.id);
-                }}
-                className="absolute -top-2.5 -right-2.5 z-20 w-6 h-6 bg-white hover:bg-rose-50 text-slate-400 hover:text-rose-600 rounded-full border border-slate-200 shadow-sm flex items-center justify-center transition-colors opacity-0 group-hover:opacity-100"
-                title="Eliminar objeto"
-              >
-                <X className="w-3.5 h-3.5" />
-              </button>
-
-              {/* RENDER ACCORDING TO TYPE */}
+              {/* RENDER MATHEMATICAL EXPRESSIONS: Clean Paper Typography without cards or boxes */}
               {obj.type === 'math' && (
-                <div className="bg-white rounded-2xl border border-slate-200 shadow-sm p-4 min-w-[260px] max-w-md">
-                  {/* KaTeX Math Display */}
-                  <div className="text-slate-900 text-lg font-serif py-1 flex items-center justify-center">
-                    <MathView latex={(obj as MathBoardObject).latex} displayMode />
+                <div
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    setSelectedId(obj.id);
+                  }}
+                  className={`relative inline-block py-1 px-2.5 rounded-xl transition-all duration-150 ${
+                    isSelected ? 'bg-indigo-50/70 ring-1 ring-indigo-400/40 shadow-sm' : 'hover:bg-slate-50/80'
+                  }`}
+                >
+                  {/* Strikethrough visual line animation if targeted by strikethrough gesture */}
+                  {isFlashingStrike && (
+                    <div className="absolute inset-x-0 top-1/2 -translate-y-1/2 h-1 bg-rose-500 rounded-full animate-in zoom-in-95 duration-200 shadow-md shadow-rose-500/50" />
+                  )}
+
+                  {/* Pure mathematical typography on canvas paper */}
+                  <div className="text-2xl font-serif text-slate-900 leading-normal tracking-wide">
+                    <MathView latex={(obj as MathBoardObject).latex} displayMode={false} />
                   </div>
 
-                  {/* Solutions display if solved */}
+                  {/* Inline Deterministic Solution underneath if solved */}
                   {(obj as MathBoardObject).solutions && (
-                    <div className="mt-2 pt-2 border-t border-slate-100">
-                      <span className="text-[10px] font-semibold text-emerald-600 uppercase tracking-wider block">
-                        Solución determinista
-                      </span>
-                      <div className="flex flex-wrap gap-1.5 mt-1 font-mono text-xs font-semibold text-slate-800">
-                        {(obj as MathBoardObject).solutions!.map((sol, idx) => (
-                          <span
-                            key={idx}
-                            className="bg-emerald-50 text-emerald-700 px-2 py-0.5 rounded border border-emerald-200"
-                          >
-                            x = {sol}
-                          </span>
-                        ))}
-                      </div>
+                    <div className="mt-1 font-mono text-sm font-semibold text-emerald-700 flex items-center gap-1.5 animate-in fade-in duration-200">
+                      <span className="text-xs text-emerald-500">⇒</span>
+                      {(obj as MathBoardObject).solutions!.map((sol, idx) => (
+                        <span key={idx} className="bg-emerald-50 text-emerald-800 px-1.5 py-0.2 rounded border border-emerald-200 text-xs">
+                          x = {sol}
+                        </span>
+                      ))}
                     </div>
                   )}
 
-                  {/* Contextual Action Bar */}
-                  <div className="mt-3 pt-2 border-t border-slate-100 flex items-center justify-between gap-1 text-[11px]">
-                    <button
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        handleSolveMath(obj as MathBoardObject);
-                      }}
-                      className="flex items-center gap-1 px-2 py-1 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 rounded-lg font-medium transition-colors"
-                      title="Resolver ecuación con SymPy"
+                  {/* Ephemeral Contextual Floating Action Pill (Revealed only on click / hover) */}
+                  {(isSelected || isHovered) && (
+                    <div
+                      onClick={(e) => e.stopPropagation()}
+                      className="absolute -top-11 left-0 z-30 bg-white/95 backdrop-blur-md border border-slate-200 shadow-xl rounded-xl p-1 flex items-center gap-1 text-[11px] animate-in fade-in slide-in-from-bottom-2 duration-150 whitespace-nowrap"
                     >
-                      <Sparkles className="w-3 h-3" />
-                      <span>Resolver</span>
-                    </button>
+                      <button
+                        onClick={() => handleSolveMath(obj as MathBoardObject)}
+                        className="flex items-center gap-1 px-2 py-1 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 rounded-lg font-semibold transition-colors"
+                        title="Resolver con SymPy"
+                      >
+                        <Sparkles className="w-3 h-3" />
+                        <span>Resolver</span>
+                      </button>
 
-                    <button
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        handleShowSteps(obj as MathBoardObject);
-                      }}
-                      className="flex items-center gap-1 px-2 py-1 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-lg font-medium transition-colors"
-                      title="Ver pasos de resolución"
-                    >
-                      <ListOrdered className="w-3 h-3" />
-                      <span>Pasos</span>
-                    </button>
+                      <button
+                        onClick={() => handleShowSteps(obj as MathBoardObject)}
+                        className="flex items-center gap-1 px-2 py-1 hover:bg-slate-100 text-slate-700 rounded-lg font-medium transition-colors"
+                        title="Pasos de resolución"
+                      >
+                        <ListOrdered className="w-3 h-3" />
+                        <span>Pasos</span>
+                      </button>
 
-                    <button
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        handleDerivative(obj as MathBoardObject);
-                      }}
-                      className="flex items-center gap-1 px-2 py-1 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-lg font-medium transition-colors"
-                      title="Calcular derivada d/dx"
-                    >
-                      <Divide className="w-3 h-3" />
-                      <span>d/dx</span>
-                    </button>
+                      <button
+                        onClick={() => handleDerivative(obj as MathBoardObject)}
+                        className="px-2 py-1 hover:bg-slate-100 text-slate-700 rounded-lg font-medium transition-colors"
+                        title="Derivada d/dx"
+                      >
+                        <Divide className="w-3 h-3 inline mr-0.5" />
+                        <span>d/dx</span>
+                      </button>
 
-                    <button
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        handleIntegral(obj as MathBoardObject);
-                      }}
-                      className="flex items-center gap-1 px-2 py-1 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-lg font-medium transition-colors"
-                      title="Calcular integral indefinida"
-                    >
-                      <span>∫</span>
-                    </button>
+                      <button
+                        onClick={() => handleIntegral(obj as MathBoardObject)}
+                        className="px-2 py-1 hover:bg-slate-100 text-slate-700 rounded-lg font-medium transition-colors"
+                        title="Integral indefinida"
+                      >
+                        <span>∫</span>
+                      </button>
 
-                    <button
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        handleGraphFromMath(obj as MathBoardObject);
-                      }}
-                      className="flex items-center gap-1 px-2 py-1 bg-blue-50 hover:bg-blue-100 text-blue-700 rounded-lg font-medium transition-colors"
-                      title="Graficar en 2D"
-                    >
-                      <TrendingUp className="w-3 h-3" />
-                      <span>Graficar</span>
-                    </button>
-                  </div>
+                      <button
+                        onClick={() => handleGraphFromMath(obj as MathBoardObject)}
+                        className="flex items-center gap-1 px-2 py-1 hover:bg-blue-50 text-blue-700 rounded-lg font-medium transition-colors"
+                        title="Graficar en 2D"
+                      >
+                        <TrendingUp className="w-3 h-3" />
+                        <span>Graficar</span>
+                      </button>
+
+                      <button
+                        onClick={() => handleDeleteObject(obj.id)}
+                        className="p-1 hover:bg-rose-50 text-slate-400 hover:text-rose-600 rounded-lg transition-colors ml-0.5"
+                        title="Tachar / Eliminar expresión"
+                      >
+                        <Trash2 className="w-3.5 h-3.5" />
+                      </button>
+                    </div>
+                  )}
                 </div>
               )}
 
-              {obj.type === 'graph' && <GraphCard graph={obj as GraphBoardObject} />}
+              {/* RENDER OTHER SIMULATION WIDGETS */}
+              {obj.type === 'graph' && (
+                <div className="relative group">
+                  <button
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      handleDeleteObject(obj.id);
+                    }}
+                    className="absolute -top-2.5 -right-2.5 z-20 w-6 h-6 bg-white hover:bg-rose-50 text-slate-400 hover:text-rose-600 rounded-full border border-slate-200 shadow-sm flex items-center justify-center transition-colors opacity-0 group-hover:opacity-100"
+                    title="Eliminar gráfica"
+                  >
+                    <X className="w-3.5 h-3.5" />
+                  </button>
+                  <GraphCard graph={obj as GraphBoardObject} />
+                </div>
+              )}
 
-              {obj.type === 'graph3d' && <Graph3DCard graph3d={obj as Graph3DBoardObject} />}
+              {obj.type === 'graph3d' && (
+                <div className="relative group">
+                  <button
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      handleDeleteObject(obj.id);
+                    }}
+                    className="absolute -top-2.5 -right-2.5 z-20 w-6 h-6 bg-white hover:bg-rose-50 text-slate-400 hover:text-rose-600 rounded-full border border-slate-200 shadow-sm flex items-center justify-center transition-colors opacity-0 group-hover:opacity-100"
+                    title="Eliminar 3D"
+                  >
+                    <X className="w-3.5 h-3.5" />
+                  </button>
+                  <Graph3DCard graph3d={obj as Graph3DBoardObject} />
+                </div>
+              )}
 
-              {obj.type === 'geometry' && <GeometryCard geo={obj as GeometryBoardObject} />}
+              {obj.type === 'geometry' && (
+                <div className="relative group">
+                  <button
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      handleDeleteObject(obj.id);
+                    }}
+                    className="absolute -top-2.5 -right-2.5 z-20 w-6 h-6 bg-white hover:bg-rose-50 text-slate-400 hover:text-rose-600 rounded-full border border-slate-200 shadow-sm flex items-center justify-center transition-colors opacity-0 group-hover:opacity-100"
+                    title="Eliminar geometría"
+                  >
+                    <X className="w-3.5 h-3.5" />
+                  </button>
+                  <GeometryCard geo={obj as GeometryBoardObject} />
+                </div>
+              )}
 
-              {obj.type === 'physics' && <PhysicsCard physicsObj={obj as PhysicsBoardObject} />}
+              {obj.type === 'physics' && (
+                <div className="relative group">
+                  <button
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      handleDeleteObject(obj.id);
+                    }}
+                    className="absolute -top-2.5 -right-2.5 z-20 w-6 h-6 bg-white hover:bg-rose-50 text-slate-400 hover:text-rose-600 rounded-full border border-slate-200 shadow-sm flex items-center justify-center transition-colors opacity-0 group-hover:opacity-100"
+                    title="Eliminar física"
+                  >
+                    <X className="w-3.5 h-3.5" />
+                  </button>
+                  <PhysicsCard physicsObj={obj as PhysicsBoardObject} />
+                </div>
+              )}
 
-              {obj.type === 'exercise' && <ExerciseCard exercise={obj as ExerciseBoardObject} />}
+              {obj.type === 'exercise' && (
+                <div className="relative group">
+                  <button
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      handleDeleteObject(obj.id);
+                    }}
+                    className="absolute -top-2.5 -right-2.5 z-20 w-6 h-6 bg-white hover:bg-rose-50 text-slate-400 hover:text-rose-600 rounded-full border border-slate-200 shadow-sm flex items-center justify-center transition-colors opacity-0 group-hover:opacity-100"
+                    title="Eliminar ejercicio"
+                  >
+                    <X className="w-3.5 h-3.5" />
+                  </button>
+                  <ExerciseCard exercise={obj as ExerciseBoardObject} />
+                </div>
+              )}
             </div>
           );
         })}
       </div>
 
-      {/* Floating Canvas Meta Badge */}
+      {/* Floating Canvas Status Indicator */}
       <div className="fixed bottom-4 left-4 z-30 bg-white/90 backdrop-blur-md border border-slate-200 px-3 py-1.5 rounded-xl shadow-sm flex items-center gap-3 text-xs text-slate-500 font-mono">
         <span className="flex items-center gap-1.5 text-slate-700 font-medium">
           <Activity className="w-3.5 h-3.5 text-emerald-500" />
-          <span>Fases 1–11 Activas</span>
+          <span>Hoja Inteligente Activa</span>
         </span>
         <span className="text-slate-300">|</span>
-        <span>Objetos: {objects.length}</span>
-        <span className="text-slate-300">|</span>
-        <span>Variables: {Object.keys(variables).length}</span>
+        <span>
+          Modo: {currentTool === 'pencil' ? 'Lápiz (Escritura libre)' : currentTool === 'pan' ? 'Mano (Navegación)' : 'Selección'}
+        </span>
+        {writingState === 'WAITING_FOR_PAUSE' && (
+          <>
+            <span className="text-slate-300">|</span>
+            <span className="text-indigo-600 font-semibold animate-pulse">Pausa detectada (2s)...</span>
+          </>
+        )}
       </div>
 
       {/* Variable Scope Drawer Panel */}
