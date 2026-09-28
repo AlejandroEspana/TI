@@ -1,0 +1,35 @@
+services:
+  api:
+    build:
+      context: ./apps/api
+      dockerfile: Dockerfile
+    container_name: mathboard-api
+    ports:
+      - "8000:8000"
+    environment:
+      - PROJECT_NAME=MathBoard API
+      - BACKEND_CORS_ORIGINS=["http://localhost:5173","http://localhost:3000","http://localhost:80"]
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+    networks:
+      - mathboard-net
+
+  web:
+    build:
+      context: .
+      dockerfile: ./apps/web/Dockerfile
+    container_name: mathboard-web
+    ports:
+      - "3000:80"
+    depends_on:
+      api:
+        condition: service_healthy
+    networks:
+      - mathboard-net
+
+networks:
+  mathboard-net:
+    driver: bridge

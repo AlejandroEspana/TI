@@ -1,0 +1,25 @@
+{
+  "name": "mathboard-monorepo",
+  "version": "0.1.0",
+  "private": true,
+  "description": "MathBoard - Interactive mathematical canvas with deterministic symbolic and graph engine",
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "scripts": {
+    "dev": "concurrently -k -p \"[{name}]\" -n \"WEB,API\" -c \"cyan.bold,yellow.bold\" \"npm run dev:web\" \"npm run dev:api\"",
+    "dev:web": "npm run dev --workspace=@mathboard/web",
+    "dev:api": "uv run --project apps/api uvicorn app.main:app --reload --port 8000",
+    "build": "npm run build --workspaces",
+    "test": "npm run test:web && npm run test:api",
+    "test:web": "npm run test --workspace=@mathboard/web",
+    "test:api": "uv run --project apps/api pytest",
+    "lint": "npm run lint --workspaces"
+  },
+  "devDependencies": {
+    "concurrently": "^9.1.2",
+    "prettier": "^3.5.2",
+    "typescript": "^5.7.3"
+  }
+}

@@ -1,0 +1,41 @@
+name: MathBoard CI
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main, develop]
+
+jobs:
+  lint-and-test:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: 'npm'
+
+      - name: Set up uv & Python
+        uses: astral-sh/setup-uv@v3
+        with:
+          python-version: '3.12'
+
+      - name: Install Node dependencies
+        run: npm ci
+
+      - name: Run Node type check & lint
+        run: npm run lint
+
+      - name: Run Web / Packages Tests
+        run: npm run test:web
+
+      - name: Install Python dependencies & Run Pytest
+        run: |
+          cd apps/api
+          uv sync --extra dev
+          uv run pytest
