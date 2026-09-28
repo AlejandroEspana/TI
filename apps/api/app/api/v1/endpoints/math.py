@@ -1,7 +1,8 @@
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Depends
 from pydantic import BaseModel
-from typing import List, Optional
-import sympy
+from typing import List
+from app.application.use_cases.solve_equation import SolveEquationUseCase
+from app.presentation.dependencies import get_solve_equation_use_case
 
 router = APIRouter()
 
@@ -20,29 +21,22 @@ class MathSolveResponse(BaseModel):
 
 
 @router.post("/solve", response_model=MathSolveResponse)
-def solve_expression(payload: MathSolveRequest) -> MathSolveResponse:
+def solve_expression(
+    payload: MathSolveRequest,
+    use_case: SolveEquationUseCase = Depends(get_solve_equation_use_case),
+) -> MathSolveResponse:
     try:
-        var = sympy.Symbol(payload.variable)
-        # Parse equation: e.g. "2*x**2 + 5*x - 3 = 0" or "2*x^2 + 5*x - 3"
-        expr_str = payload.expression.replace("^", "**")
-        if "=" in expr_str:
-            lhs_str, rhs_str = expr_str.split("=", 1)
-            lhs = sympy.sympify(lhs_str)
-            rhs = sympy.sympify(rhs_str)
-            eq = sympy.Eq(lhs, rhs)
-            solutions = sympy.solve(eq, var)
-        else:
-            eq = sympy.sympify(expr_str)
-            solutions = sympy.solve(eq, var)
-
-        str_solutions = [str(sol) for sol in solutions]
-        latex_solutions = [sympy.latex(sol) for sol in solutions]
-
-        return MathSolveResponse(
-            expression=payload.expression,
+        domain_result = use_case.execute(
+            expression_raw=payload.expression,
             variable=payload.variable,
-            result=str_solutions,
-            latex_result=latex_solutions,
         )
+        return MathSolveResponse(
+            expression=domain_result.expression,
+            variable=domain_result.variable,
+            result=domain_result.solutions,
+            latex_result=domain_result.latex_solutions,
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
-        raise HTTPException(status_code=400, detail=f"Math engine error: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Unexpected error: {str(e)}")

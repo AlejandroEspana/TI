@@ -1,77 +1,54 @@
 # Arquitectura del Sistema — MathBoard
 
-MathBoard es un tablero matemático interactivo modular diseñado para interpretar expresiones matemáticas, analizarlas semánticamente, resolverlas mediante motores simbólicos deterministas (sin LLM) y representarlas gráficamente en 2D.
+MathBoard es una plataforma educativa e interactiva basada en un **tablero virtual inteligente** para matemáticas y física.
+
+Para el documento exhaustivo de visión técnica, Clean Architecture, principios de diseño y el roadmap completo de 12 fases, consulta:
+👉 **[Blueprint Técnico Completo (technical_blueprint.md)](./architecture/technical_blueprint.md)**
 
 ---
 
-## 🏛️ Visión General y Capas
+## 🏛️ Principios Rectores
 
-```
-┌─────────────────────────────────────────────────────────────┐
-│                    Frontend (React / Vite)                  │
-│                                                             │
-│   ┌──────────────┐     ┌──────────────┐    ┌────────────┐   │
-│   │ Smart Canvas │ ──▶ │ MathLive     │ ──▶│ MathBoard  │   │
-│   │ (tldraw)     │     │ Editor       │    │ Graph (2D) │   │
-│   └──────────────┘     └──────────────┘    └────────────┘   │
-└───────────────────────────────┬─────────────────────────────┘
-                                │
-                                ▼ HTTP / REST
-┌─────────────────────────────────────────────────────────────┐
-│                    Backend (FastAPI / uv)                   │
-│                                                             │
-│   ┌─────────────────────────────────────────────────────┐   │
-│   │ API Router (/api/v1/math/*)                         │   │
-│   └──────────────────────────┬──────────────────────────┘   │
-│                              │                              │
-│         ┌────────────────────┴────────────────────┐         │
-│         ▼                                         ▼         │
-│  ┌──────────────┐                          ┌────────────┐   │
-│  │ SymPy Engine │                          │ Step/Trans │   │
-│  │ (Algebra/Cal)│                          │ Engine     │   │
-│  └──────────────┘                          └────────────┘   │
-└─────────────────────────────────────────────────────────────┘
-```
+1. **Determinismo Primero**: La computación simbólica y numérica reside en motores formales verificables (SymPy, NumPy). Ningún modelo generativo o LLM actúa como fuente de verdad en las fases centrales (Fases 0–6).
+2. **Clean Architecture & Ports and Adapters**:
+   - `Domain`: Reglas y entidades de negocio puras (`MathExpression`, `BoardObject`, interfaces de puertos).
+   - `Application`: Casos de uso (`SolveEquationUseCase`, `SimplifyExpressionUseCase`).
+   - `Infrastructure`: Adaptadores concretos (`SymPyAdapter`, `RapierAdapter`, `PostgresRepository`).
+   - `Presentation`: Controladores FastAPI y UI React.
+3. **Desacoplamiento Tecnológico**: Cada componente (tldraw, MathLive, SymPy, Plotly) se conecta mediante puertos y adaptadores para permitir sustitución sin afectar las reglas de negocio.
 
 ---
 
-## 📦 Estructura de Paquetes Monorepo
-
-* **`apps/web`**: Aplicación de usuario (React 19, TypeScript, Vite, Tailwind CSS).
-* **`apps/api`**: Servicio de cálculo simbólico y numérico determinista (FastAPI, SymPy, NumPy).
-* **`packages/shared`**: Definiciones de tipos comunes (AST, modelos de objetos del canvas, respuestas de API).
-* **`packages/core`**: Gestión de estado del canvas, registro de objetos y viewport.
-* **`packages/parser`**: Tokenizador y clasificador semántico para expresiones LaTeX.
-* **`packages/math-engine`**: Abstracción de comandos de cálculo (`MathOperation`, `SolveOperation`).
-* **`packages/visualization`**: Generador de especificaciones de graficación y análisis de funciones.
-
----
-
-## 🔄 Pipeline Matemático (Fases 2–6)
+## 🔄 Flujo de Trabajo en el Backend
 
 ```text
-Entrada LaTeX (MathLive)
+HTTP Request (POST /api/v1/math/solve)
       │
       ▼
-Tokenizer & Parser (packages/parser)
+Presentation: Router FastAPI
       │
       ▼
-AST Semántico (MathAST)
+Application: SolveEquationUseCase
       │
       ▼
-Clasificador Semántico (Equation | Polynomial | Integral | Function)
+Domain Port: MathEnginePort (Abstracción)
       │
       ▼
-Ejecutor de Operación (packages/math-engine ──▶ FastAPI / SymPy)
+Infrastructure: SymPyAdapter (Implementación concreta con SymPy)
       │
-      ├───────────────────────┬────────────────────────┐
-      ▼                       ▼                        ▼
-Solución Simbólica       Pasos de Transformación   Especificación Gráfica (2D)
-(x = 1/2, x = -3)        (Paso a paso explícito)  (Plotly / D3)
+      ▼
+Retorno: MathResult (Entidad de Dominio) -> Response DTO
 ```
 
 ---
 
-## 🛡️ Principio de Determinismo
+## 🗺️ Fases del Desarrollo
 
-MathBoard **no depende de modelos de lenguaje (LLMs)** para la deducción matemática en las Fases 0 a 6. Todo cómputo, simplificación y factorización es realizado por algoritmos deterministas verificables (SymPy/NumPy).
+- **Fase 0**: Arquitectura y Preparación *(Completada)*
+- **Fase 1**: Smart Canvas (tldraw, Board Engine, Commands) *(Siguiente)*
+- **Fase 2**: Editor Matemático (MathLive, KaTeX, MathObject)
+- **Fase 3**: Parser + AST Propio + Análisis Semántico
+- **Fase 4**: Math Engine (Álgebra, Cálculo, Matrices con SymPy)
+- **Fase 5**: Transformation / Step Engine (Procedimientos explicados)
+- **Fase 6**: Graph Engine 2D (Plotly, D3, Especificaciones desacopladas)
+- **Fase 7 a 12**: Geometría, Física, 3D, Reconocimiento Manuscrito, Educación e IA Tutor.
