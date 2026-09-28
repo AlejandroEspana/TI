@@ -1,7 +1,14 @@
-import { describe, it, expect } from 'vitest';
-import { MathematicalStrokeRecognizer, Stroke } from '../src/index';
+import { describe, it, expect, beforeEach } from 'vitest';
+import { MathematicalStrokeRecognizer, Stroke, TemplateStore } from '../src/index';
 
-describe('Mathematical Handwriting Recognition Engine', () => {
+describe('Mathematical Handwriting Recognition Engine ($P Point Cloud & Multi-Examples)', () => {
+  beforeEach(() => {
+    const store = TemplateStore.getInstance();
+    store.resetProfileToDefaults('default');
+    store.resetProfileToDefaults('profesor');
+    store.setActiveProfile('default');
+  });
+
   it('recognizes a horizontal line as minus sign', () => {
     // Horizontal line: (10, 50) to (60, 50)
     const points = [
@@ -55,5 +62,33 @@ describe('Mathematical Handwriting Recognition Engine', () => {
     expect(stroke.isClosed).toBe(true);
     const { latex } = MathematicalStrokeRecognizer.recognizeStrokesToLatex([points]);
     expect(latex).toBe('0');
+  });
+
+  it('prioritizes user-calibrated multi-examples in a teacher/student profile', () => {
+    const store = TemplateStore.getInstance();
+    store.setActiveProfile('profesor');
+
+    // A specific zigzag shape trained as variable 'z'
+    const customZ1 = [
+      [{ x: 10, y: 10 }, { x: 40, y: 10 }, { x: 10, y: 40 }, { x: 40, y: 40 }],
+    ];
+    const customZ2 = [
+      [{ x: 12, y: 12 }, { x: 42, y: 12 }, { x: 12, y: 42 }, { x: 42, y: 42 }],
+    ];
+
+    // Add multiple examples to teacher's profile
+    store.addExample('z', 'z', customZ1);
+    store.addExample('z', 'z', customZ2);
+
+    expect(store.getExamplesForSymbol('z', 'profesor').length).toBe(2);
+
+    // Test recognizing a similar stroke under teacher profile
+    const testZ = [
+      [{ x: 11, y: 11 }, { x: 41, y: 11 }, { x: 11, y: 41 }, { x: 41, y: 41 }],
+    ];
+
+    const result = MathematicalStrokeRecognizer.recognizeStrokesToLatex(testZ, 'profesor');
+    expect(result.glyphs[0].symbol).toBe('z');
+    expect(result.latex).toBe('z');
   });
 });

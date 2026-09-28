@@ -29,6 +29,7 @@ import { Graph3DCard } from './Graph3DCard';
 import { ExerciseCard } from './ExerciseCard';
 import { StepsModal } from './StepsModal';
 import { HandwritingLayer } from './HandwritingLayer';
+import { HandwritingCalibrationModal } from './HandwritingCalibrationModal';
 import { VariableScopePanel } from './VariableScopePanel';
 import {
   solveEquation,
@@ -58,6 +59,7 @@ export function MathBoardCanvas() {
 
   // Modals state
   const [editorOpen, setEditorOpen] = useState(false);
+  const [calibrationOpen, setCalibrationOpen] = useState(false);
   const [stepsModal, setStepsModal] = useState<{ open: boolean; expr: string; steps: MathStep[] }>({
     open: false,
     expr: '',
@@ -568,6 +570,7 @@ export function MathBoardCanvas() {
         onExportJSON={handleExportJSON}
         onClear={handleClear}
         onToggleVariables={() => setShowVariables((prev) => !prev)}
+        onOpenCalibration={() => setCalibrationOpen(true)}
         variablesCount={Object.keys(variables).length}
         zoom={viewport.zoom}
       />
@@ -587,6 +590,7 @@ export function MathBoardCanvas() {
         onClose={() => setCurrentTool('select')}
         onDigitalize={(latex, pos) => handleAddMathObject(latex, pos)}
         viewport={viewport}
+        onOpenCalibration={() => setCalibrationOpen(true)}
       />
 
       {/* Transformed Objects Container */}
@@ -747,6 +751,12 @@ export function MathBoardCanvas() {
         variables={variables}
         onSetVariable={(name, val) => scopeRef.current.setVariable(name, val)}
         onRemoveVariable={(name) => scopeRef.current.removeVariable(name)}
+      />
+
+      {/* Handwriting Multi-Example & Profile Calibration Modal */}
+      <HandwritingCalibrationModal
+        isOpen={calibrationOpen}
+        onClose={() => setCalibrationOpen(false)}
       />
 
       {/* Math Editor Modal */}

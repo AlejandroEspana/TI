@@ -1,6 +1,6 @@
 import { useState, useRef, useEffect } from 'react';
-import { MathematicalStrokeRecognizer, type StrokePoint } from '@mathboard/handwriting';
-import { Sparkles, Trash2, X, Check } from 'lucide-react';
+import { MathematicalStrokeRecognizer, TemplateStore, type StrokePoint } from '@mathboard/handwriting';
+import { Sparkles, Trash2, X, Check, GraduationCap } from 'lucide-react';
 import { MathView } from './MathView';
 
 interface HandwritingLayerProps {
@@ -8,6 +8,7 @@ interface HandwritingLayerProps {
   onClose: () => void;
   onDigitalize: (latex: string, position: { x: number; y: number }) => void;
   viewport: { x: number; y: number; zoom: number };
+  onOpenCalibration?: () => void;
 }
 
 export function HandwritingLayer({
@@ -15,12 +16,21 @@ export function HandwritingLayer({
   onClose,
   onDigitalize,
   viewport,
+  onOpenCalibration,
 }: HandwritingLayerProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const [strokes, setStrokes] = useState<StrokePoint[][]>([]);
   const [currentStroke, setCurrentStroke] = useState<StrokePoint[]>([]);
   const isDrawingRef = useRef(false);
   const [previewLatex, setPreviewLatex] = useState<string>('');
+  const [activeProfileName, setActiveProfileName] = useState(() => TemplateStore.getInstance().getActiveProfile().name);
+
+  // Subscribe to profile changes
+  useEffect(() => {
+    return TemplateStore.getInstance().subscribe(() => {
+      setActiveProfileName(TemplateStore.getInstance().getActiveProfile().name);
+    });
+  }, []);
 
   // Resize canvas to full window
   useEffect(() => {
@@ -82,8 +92,9 @@ export function HandwritingLayer({
       setStrokes(updatedStrokes);
       setCurrentStroke([]);
 
-      // Real-time stroke recognition
-      const { latex } = MathematicalStrokeRecognizer.recognizeStrokesToLatex(updatedStrokes);
+      // Real-time stroke recognition using active calibrated profile
+      const activeId = TemplateStore.getInstance().getActiveProfile().id;
+      const { latex } = MathematicalStrokeRecognizer.recognizeStrokesToLatex(updatedStrokes, activeId);
       if (latex) {
         setPreviewLatex(latex);
       }
@@ -161,6 +172,17 @@ export function HandwritingLayer({
           <Check className="w-4 h-4" />
           <span>Digitalizar al Tablero</span>
         </button>
+
+        {onOpenCalibration && (
+          <button
+            onClick={onOpenCalibration}
+            title={`Calibrar caligrafía (Perfil: ${activeProfileName})`}
+            className="flex items-center gap-1 px-2.5 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl text-xs font-medium transition-colors"
+          >
+            <GraduationCap className="w-3.5 h-3.5 text-indigo-600" />
+            <span className="text-[11px] font-semibold">{activeProfileName}</span>
+          </button>
+        )}
 
         <button
           onClick={handleClear}

@@ -14,6 +14,7 @@ import {
   Maximize2,
   Download,
   Trash2,
+  Sparkles,
 } from 'lucide-react';
 
 export type ToolMode =
@@ -38,6 +39,7 @@ interface CanvasToolbarProps {
   onExportJSON: () => void;
   onClear: () => void;
   onToggleVariables: () => void;
+  onOpenCalibration: () => void;
   variablesCount: number;
   zoom: number;
 }
@@ -53,6 +55,7 @@ export function CanvasToolbar({
   onExportJSON,
   onClear,
   onToggleVariables,
+  onOpenCalibration,
   variablesCount,
   zoom,
 }: CanvasToolbarProps) {
@@ -89,8 +92,8 @@ export function CanvasToolbar({
         ))}
       </div>
 
-      {/* Variables HUD Toggle */}
-      <div className="flex items-center px-1.5 border-r border-slate-200">
+      {/* Variables & Calibration Buttons */}
+      <div className="flex items-center gap-1 px-1.5 border-r border-slate-200">
         <button
           onClick={onToggleVariables}
           title="Variables del Tablero"
@@ -103,6 +106,15 @@ export function CanvasToolbar({
               {variablesCount}
             </span>
           )}
+        </button>
+
+        <button
+          onClick={onOpenCalibration}
+          title="Calibrar Caligrafía y Perfiles"
+          className="flex items-center gap-1 px-2.5 py-1.5 rounded-xl text-xs font-semibold text-slate-700 hover:text-indigo-600 hover:bg-indigo-50 transition-colors"
+        >
+          <Sparkles className="w-3.5 h-3.5 text-indigo-600" />
+          <span className="hidden sm:inline">Calibrar</span>
         </button>
       </div>
 
