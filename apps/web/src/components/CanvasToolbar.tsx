@@ -72,7 +72,12 @@ export function CanvasToolbar({
   ];
 
   return (
-    <div className="fixed top-5 left-1/2 -translate-x-1/2 z-40 bg-white/95 backdrop-blur-md border border-slate-200 shadow-xl rounded-2xl p-1.5 flex items-center gap-1 max-w-[96vw] overflow-x-auto">
+    <div
+      data-ui="true"
+      onPointerDown={(e) => e.stopPropagation()}
+      onClick={(e) => e.stopPropagation()}
+      className="fixed top-5 left-1/2 -translate-x-1/2 z-40 bg-white/95 backdrop-blur-md border border-slate-200 shadow-xl rounded-2xl p-1.5 flex items-center gap-1 max-w-[96vw] overflow-x-auto"
+    >
       {/* Primary Tools */}
       <div className="flex items-center gap-1 pr-2 border-r border-slate-200">
         {tools.map((t) => (

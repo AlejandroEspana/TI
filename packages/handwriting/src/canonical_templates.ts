@@ -73,6 +73,22 @@ export const CANONICAL_TEMPLATES: CanonicalTemplate[] = [
     ],
   ]),
 
+  // 2: Smooth curved arch + flat base
+  makeTemplate('2', '2', 'smooth', [
+    [
+      { x: 30, y: 35 }, { x: 50, y: 15 }, { x: 70, y: 35 },
+      { x: 50, y: 60 }, { x: 30, y: 85 }, { x: 75, y: 85 },
+    ],
+  ]),
+
+  // 2: Rounded hook with sloping base
+  makeTemplate('2', '2', 'hook', [
+    [
+      { x: 28, y: 32 }, { x: 48, y: 12 }, { x: 72, y: 28 },
+      { x: 52, y: 55 }, { x: 28, y: 88 }, { x: 45, y: 88 }, { x: 75, y: 88 },
+    ],
+  ]),
+
   // 3: Two curved arcs
   makeTemplate('3', '3', 'standard', [
     [

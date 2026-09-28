@@ -33,7 +33,7 @@ export class SpatialStrokeGrouper {
     const avgHeight = heights.length > 0
       ? heights.reduce((sum, h) => sum + h, 0) / heights.length
       : 35;
-    const verticalLineThreshold = Math.max(25, avgHeight * 0.85);
+    const verticalLineThreshold = Math.max(45, avgHeight * 1.5);
 
     // 1. Group into vertical line bands
     // Sort by vertical center Y
@@ -45,7 +45,14 @@ export class SpatialStrokeGrouper {
       for (const band of lineBands) {
         // Average Y center of band
         const bandCenterY = band.reduce((sum, s) => sum + s.bbox.centerY, 0) / band.length;
-        if (Math.abs(item.bbox.centerY - bandCenterY) <= verticalLineThreshold) {
+        const bandMinY = Math.min(...band.map((s) => s.bbox.minY));
+        const bandMaxY = Math.max(...band.map((s) => s.bbox.maxY));
+
+        // Placed in band if center is close OR item vertically overlaps with band span
+        const isCenterClose = Math.abs(item.bbox.centerY - bandCenterY) <= verticalLineThreshold;
+        const isSpanOverlap = item.bbox.minY <= bandMaxY + 12 && item.bbox.maxY >= bandMinY - 25;
+
+        if (isCenterClose || isSpanOverlap) {
           band.push(item);
           placed = true;
           break;

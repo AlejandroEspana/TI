@@ -426,6 +426,21 @@ export function MathBoardCanvas() {
 
   // Pointer Events Handlers (Handles Mouse, Pen/Stylus, Touch uniformly with capture)
   const handlePointerDown = (e: React.PointerEvent) => {
+    // If clicking on interactive UI (buttons, inputs, toolbar, modals, context menu), do not intercept
+    const target = e.target as HTMLElement | null;
+    if (
+      target &&
+      (target.closest('button') ||
+        target.closest('input') ||
+        target.closest('select') ||
+        target.closest('textarea') ||
+        target.closest('[data-ui="true"]') ||
+        target.closest('.canvas-toolbar') ||
+        target.closest('.canvas-ui'))
+    ) {
+      return;
+    }
+
     if (e.button === 1 || currentTool === 'pan') {
       isPanningRef.current = true;
       panStartRef.current = { x: e.clientX - viewport.x, y: e.clientY - viewport.y };
@@ -1091,25 +1106,31 @@ export function MathBoardCanvas() {
       />
 
       {/* Handwriting Multi-Example & Profile Calibration Modal */}
-      <HandwritingCalibrationModal
-        isOpen={calibrationOpen}
-        onClose={() => setCalibrationOpen(false)}
-      />
+      {calibrationOpen && (
+        <HandwritingCalibrationModal
+          isOpen={calibrationOpen}
+          onClose={() => setCalibrationOpen(false)}
+        />
+      )}
 
       {/* Math Editor Modal */}
-      <MathEditorModal
-        isOpen={editorOpen}
-        onClose={() => setEditorOpen(false)}
-        onSave={(latex) => handleAddMathObject(latex)}
-      />
+      {editorOpen && (
+        <MathEditorModal
+          isOpen={editorOpen}
+          onClose={() => setEditorOpen(false)}
+          onSave={(latex) => handleAddMathObject(latex)}
+        />
+      )}
 
       {/* Step by step Viewer Modal */}
-      <StepsModal
-        isOpen={stepsModal.open}
-        expression={stepsModal.expr}
-        steps={stepsModal.steps}
-        onClose={() => setStepsModal({ open: false, expr: '', steps: [] })}
-      />
+      {stepsModal.open && (
+        <StepsModal
+          isOpen={stepsModal.open}
+          expression={stepsModal.expr}
+          steps={stepsModal.steps}
+          onClose={() => setStepsModal({ open: false, expr: '', steps: [] })}
+        />
+      )}
     </div>
   );
 }

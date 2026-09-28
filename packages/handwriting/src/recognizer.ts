@@ -14,7 +14,60 @@ export interface RecognizedGlyph extends RecognizedSymbol {}
 
 export class MathematicalStrokeRecognizer {
   /**
-   * Group strokes into glyph clusters based on spatial proximity
+   * Evaluates whether two individual strokes belong to the same glyph.
+   */
+  static areStrokesSameGlyph(s1: Stroke, s2: Stroke): boolean {
+    const b1 = s1.bbox;
+    const b2 = s2.bbox;
+
+    const xOverlap = Math.max(0, Math.min(b1.maxX, b2.maxX) - Math.max(b1.minX, b2.minX));
+    const yOverlap = Math.max(0, Math.min(b1.maxY, b2.maxY) - Math.max(b1.minY, b2.minY));
+    const xDist = Math.max(0, Math.max(b1.minX, b2.minX) - Math.min(b1.maxX, b2.maxX));
+    const yDist = Math.max(0, Math.max(b1.minY, b2.minY) - Math.min(b1.maxY, b2.maxY));
+
+    const minW = Math.min(b1.width, b2.width);
+    const minH = Math.min(b1.height, b2.height);
+    const maxH = Math.max(b1.height, b2.height);
+
+    // 1. Two strokes that physically intersect or heavily overlap in 2D (e.g. 'x', '+', '*', '4', 't')
+    if (xOverlap > 0 && yOverlap > 0) {
+      const relW = minW > 0 ? xOverlap / minW : 0;
+      const relH = minH > 0 ? yOverlap / minH : 0;
+      if (relW >= 0.22 && relH >= 0.2) {
+        return true;
+      }
+    }
+
+    // 2. Vertically stacked strokes with heavy horizontal overlap (e.g. '=', ':', '!', 'i')
+    if (xDist === 0 && xOverlap >= 0.42 * minW) {
+      if (yDist <= Math.max(22, maxH * 1.5)) {
+        return true;
+      }
+    }
+
+    // 3. Touching endpoints (e.g. multi-stroke '7', square root checkmark + roof bar)
+    const p1Start = s1.points[0];
+    const p1End = s1.points[s1.points.length - 1];
+    const p2Start = s2.points[0];
+    const p2End = s2.points[s2.points.length - 1];
+
+    if (p1Start && p1End && p2Start && p2End) {
+      const d1 = Math.hypot(p1End.x - p2Start.x, p1End.y - p2Start.y);
+      const d2 = Math.hypot(p2End.x - p1Start.x, p2End.y - p1Start.y);
+      const d3 = Math.hypot(p1Start.x - p2Start.x, p1Start.y - p2Start.y);
+      const d4 = Math.hypot(p1End.x - p2End.x, p1End.y - p2End.y);
+      const minTouch = Math.min(d1, d2, d3, d4);
+      if (minTouch < 10) {
+        return true;
+      }
+    }
+
+    // Strokes that are horizontally side-by-side belong to separate characters
+    return false;
+  }
+
+  /**
+   * Group strokes into glyph clusters based on spatial connected components
    */
   static clusterStrokes(strokes: Stroke[]): Stroke[][] {
     if (strokes.length === 0) return [];
@@ -25,28 +78,24 @@ export class MathematicalStrokeRecognizer {
 
     for (let i = 0; i < strokes.length; i++) {
       if (visited.has(i)) continue;
-      const cluster = [strokes[i]];
+
+      const cluster: Stroke[] = [];
+      const queue: number[] = [i];
       visited.add(i);
 
-      for (let j = i + 1; j < strokes.length; j++) {
-        if (visited.has(j)) continue;
-        const b1 = strokes[i].bbox;
-        const b2 = strokes[j].bbox;
+      while (queue.length > 0) {
+        const currIdx = queue.shift()!;
+        cluster.push(strokes[currIdx]);
 
-        // Check if b1 and b2 overlap or are very close (e.g. for '=', '+', 'x')
-        const xOverlap = Math.max(0, Math.min(b1.maxX, b2.maxX) - Math.max(b1.minX, b2.minX));
-        const yOverlap = Math.max(0, Math.min(b1.maxY, b2.maxY) - Math.max(b1.minY, b2.minY));
-        const xDist = Math.max(0, Math.max(b1.minX, b2.minX) - Math.min(b1.maxX, b2.maxX));
-        const yDist = Math.max(0, Math.max(b1.minY, b2.minY) - Math.min(b1.maxY, b2.maxY));
-
-        const maxDim = Math.max(b1.width, b1.height, b2.width, b2.height);
-        const isClose = (xOverlap > 0 && yDist < maxDim * 0.9) || (xDist < maxDim * 0.4 && yOverlap > 0);
-
-        if (isClose) {
-          cluster.push(strokes[j]);
-          visited.add(j);
+        for (let j = 0; j < strokes.length; j++) {
+          if (visited.has(j)) continue;
+          if (this.areStrokesSameGlyph(strokes[currIdx], strokes[j])) {
+            visited.add(j);
+            queue.push(j);
+          }
         }
       }
+
       clusters.push(cluster);
     }
 
@@ -54,7 +103,7 @@ export class MathematicalStrokeRecognizer {
   }
 
   /**
-   * Classifies a cluster of strokes using the hybrid $P Point Cloud engine,
+   * Classifies a cluster of strokes using geometry analysis and the hybrid $P Point Cloud engine,
    * computing the exact bounding box, category, and mathematical baseline.
    */
   static classifyCluster(cluster: Stroke[], profileId?: string): RecognizedSymbol {
@@ -82,8 +131,7 @@ export class MathematicalStrokeRecognizer {
 
     const id = `sym_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`;
 
-    // Fast-path for distinct geometric operators:
-    // A. Two horizontal parallel strokes is definitely '='
+    // Fast-path A: Two horizontal parallel strokes is definitely '='
     if (cluster.length === 2) {
       const [s1, s2] = cluster;
       if (s1.isHorizontalLine && s2.isHorizontalLine) {
@@ -108,16 +156,52 @@ export class MathematicalStrokeRecognizer {
           symbol: '+',
           latex: '+',
           category: 'operator',
-          confidence: 0.95,
+          confidence: 0.96,
           bbox,
           baseline: bbox.centerY,
           centerX: bbox.centerX,
           centerY: bbox.centerY,
         };
       }
+
+      // Fast-path B: Two crossed diagonal strokes is definitely variable 'x'
+      const pts1 = s1.points;
+      const pts2 = s2.points;
+      if (pts1.length >= 2 && pts2.length >= 2) {
+        const p1Start = pts1[0], p1End = pts1[pts1.length - 1];
+        const p2Start = pts2[0], p2End = pts2[pts2.length - 1];
+
+        const dx1 = p1End.x - p1Start.x;
+        const dy1 = p1End.y - p1Start.y;
+        const dx2 = p2End.x - p2Start.x;
+        const dy2 = p2End.y - p2Start.y;
+
+        const slope1 = dy1 / (dx1 || 0.001);
+        const slope2 = dy2 / (dx2 || 0.001);
+
+        if (
+          Math.abs(dx1) > 4 && Math.abs(dy1) > 4 &&
+          Math.abs(dx2) > 4 && Math.abs(dy2) > 4 &&
+          slope1 * slope2 < 0 &&
+          Math.abs(s1.bbox.centerX - s2.bbox.centerX) < bbox.width * 0.6 &&
+          Math.abs(s1.bbox.centerY - s2.bbox.centerY) < bbox.height * 0.6
+        ) {
+          return {
+            id,
+            symbol: 'x',
+            latex: 'x',
+            category: 'variable',
+            confidence: 0.98,
+            bbox,
+            baseline: bbox.minY + bbox.height * 0.85,
+            centerX: bbox.centerX,
+            centerY: bbox.centerY,
+          };
+        }
+      }
     }
 
-    // B. Single horizontal line: either minus sign '-' or fraction bar
+    // Fast-path C: Single horizontal line: either minus sign '-' or fraction bar
     if (cluster.length === 1 && cluster[0].isHorizontalLine) {
       const category: SymbolCategory = width > 2.2 * height && width > 25 ? 'fraction_bar' : 'operator';
       return {
@@ -133,19 +217,70 @@ export class MathematicalStrokeRecognizer {
       };
     }
 
-    // C. Single vertical line is definitely '1'
-    if (cluster.length === 1 && cluster[0].isVerticalLine && aspect < 0.25) {
-      return {
-        id,
-        symbol: '1',
-        latex: '1',
-        category: 'digit',
-        confidence: 0.96,
-        bbox,
-        baseline: bbox.minY + bbox.height * 0.88,
-        centerX: bbox.centerX,
-        centerY: bbox.centerY,
-      };
+    // Fast-path D: Single vertical / slender stroke: distinguish '(', ')', and '1' by curvature
+    if (cluster.length === 1 && (cluster[0].isVerticalLine || (aspect < 0.45 && height > 16))) {
+      const s = cluster[0];
+      const pts = s.points;
+      if (pts.length >= 2) {
+        const start = pts[0];
+        const end = pts[pts.length - 1];
+
+        let maxLeftDev = 0;
+        let maxRightDev = 0;
+        const ySpan = end.y - start.y || 1;
+
+        for (const p of pts) {
+          const chordX = start.x + ((end.x - start.x) * (p.y - start.y)) / ySpan;
+          const diff = p.x - chordX;
+          if (diff < -maxLeftDev) maxLeftDev = -diff;
+          if (diff > maxRightDev) maxRightDev = diff;
+        }
+
+        // Strong leftward curvature -> '('
+        if (maxLeftDev > Math.max(3.5, width * 0.35) && maxLeftDev > maxRightDev * 1.5) {
+          return {
+            id,
+            symbol: '(',
+            latex: '(',
+            category: 'fence',
+            confidence: 0.98,
+            bbox,
+            baseline: bbox.centerY,
+            centerX: bbox.centerX,
+            centerY: bbox.centerY,
+          };
+        }
+
+        // Strong rightward curvature -> ')'
+        if (maxRightDev > Math.max(3.5, width * 0.35) && maxRightDev > maxLeftDev * 1.5) {
+          return {
+            id,
+            symbol: ')',
+            latex: ')',
+            category: 'fence',
+            confidence: 0.98,
+            bbox,
+            baseline: bbox.centerY,
+            centerX: bbox.centerX,
+            centerY: bbox.centerY,
+          };
+        }
+
+        // Very low curvature -> digit '1'
+        if (aspect < 0.28 && maxLeftDev < height * 0.12 && maxRightDev < height * 0.12) {
+          return {
+            id,
+            symbol: '1',
+            latex: '1',
+            category: 'digit',
+            confidence: 0.98,
+            bbox,
+            baseline: bbox.minY + bbox.height * 0.88,
+            centerX: bbox.centerX,
+            centerY: bbox.centerY,
+          };
+        }
+      }
     }
 
     // 2. Prepare normalized candidate point cloud
